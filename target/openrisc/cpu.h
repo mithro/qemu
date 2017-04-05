@@ -274,6 +274,8 @@ typedef struct CPUOpenRISCState {
     target_ulong ppc;         /* Prev PC */
     target_ulong jmp_pc;      /* Jump PC */
 
+    target_ulong shadow_gpr[16][32]; /* Shadow registers */
+
     uint64_t mac;             /* Multiply registers MACHI:MACLO */
 
     target_ulong epcr;        /* Exception PC register */
