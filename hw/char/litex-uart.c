@@ -22,7 +22,6 @@
 #include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "trace.h"
 #include "sysemu/char.h"
 #include "qemu/error-report.h"
 
@@ -198,7 +197,6 @@ static uint64_t uart_read(void *opaque, hwaddr addr, unsigned size)
         BADF("litex-uart read register: UNKOWN ADDR %x\n", (unsigned int)addr);
     }
     //DPRINTF("Got uart read %08x val: %08x\n", (unsigned int)addr*4, r);
-    trace_litex_uart_memory_read(addr*4 , r);
     uart_irq_update(s);
     return r;
 }
@@ -242,7 +240,6 @@ static void uart_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
         BADF("litex-uart read register: UNKOWN ADDR %x\n", (unsigned int)addr);
     }
     uart_irq_update(s);
-    trace_litex_uart_memory_write(addr, value);
 }
 
 static const MemoryRegionOps uart_mmio_ops = {
