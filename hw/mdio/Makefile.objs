@@ -1,0 +1,2 @@
+common-obj-$(CONFIG_MDIO) += core.o
+common-obj-$(CONFIG_MDIO) += eth_phy.o

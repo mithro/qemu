@@ -20,3 +20,7 @@ CONFIG_SSI_M25P80=y
 # LiteX SDCard via SPI support
 CONFIG_SSI_SD=y
 CONFIG_SD=y
+
+# LiteEth support
+CONFIG_MDIO=y
+CONFIG_LITEETH=y
