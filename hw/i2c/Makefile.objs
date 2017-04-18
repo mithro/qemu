@@ -10,4 +10,4 @@ common-obj-$(CONFIG_ASPEED_SOC) += aspeed_i2c.o
 obj-$(CONFIG_OMAP) += omap_i2c.o
 
 # Needs CONFIG_BITBANG_I2C
-common-obj-$(CONFIG_LITEX_I2C) += litex_i2c.c
+common-obj-$(CONFIG_LITEX_I2C) += litex_i2c.o
