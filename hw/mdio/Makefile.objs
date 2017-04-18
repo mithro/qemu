@@ -1,0 +1,2 @@
+common-obj-y += core.o
+common-obj-y += eth_phy.o
