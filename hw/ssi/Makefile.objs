@@ -10,3 +10,4 @@ obj-$(CONFIG_IMX) += imx_spi.o
 
 # Bitbanging SPI support
 config-obj-$(CONFIG_BITBANG_SPI) += bitbang_ssi.o
+config-obj-$(CONFIG_LITEX_SPI) += litex_ssi.o
