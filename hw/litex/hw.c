@@ -122,4 +122,13 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
     litex_uart_create(CSR_UART_BASE & MEM_MASK, irqs[2 /*UART_INTERRUPT*/], serial_hds[0]);
 #endif
 
+    litex_spi_memory(address_space_mem, irqs);
+
+#define CSR_SPISDCARD_BASE 0xe0015000
+#ifdef CSR_SPISDCARD_BASE
+    litex_sdcard_create(CSR_SPISDCARD_BASE & MEM_MASK);
+#else
+    #error "Blah!"
+#endif
+
 }

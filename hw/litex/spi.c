@@ -24,7 +24,7 @@
 
 void* m25p80_get_storage(void *opaque);
 
-void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
+void litex_spi_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
 {
 
 #ifdef SPIFLASH_BASE
@@ -79,6 +79,13 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
                 printf("litex.spiflash: Failed to read flash contents, wanted s->size %d, got %d\n", (int)spiflash_size, rsize);
                 abort();
             }
+
+            /* Clear the dinfo->type to prevent complaining about
+             * orphan device.
+             */
+            dinfo->type = IF_NONE;
+        } else {
+            printf("No block device provided for spiflash!\n");
         }
 #endif
 
@@ -93,29 +100,26 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
 #endif
 
 
-#define CSR_SPISDCARD_BASE 0xe0015000
-#ifdef CSR_SPISDCARD_BASE
-    {
-        DeviceState *spi_master;
-        DeviceState *spi_sdcard;
-        SSIBus *spi_bus;
-        qemu_irq cs_line;
+}
 
-        spi_master = qdev_create(NULL, "litex_ssi");
-        qdev_init_nofail(spi_master);
-        sysbus_mmio_map(SYS_BUS_DEVICE(spi_master), 0, CSR_SPISDCARD_BASE & MEM_MASK);
+DeviceState *litex_sdcard_create(hwaddr reg_base)
+{
+    DeviceState *spi_master;
+    DeviceState *spi_sdcard;
+    SSIBus *spi_bus;
+    qemu_irq cs_line;
 
-        spi_bus = (SSIBus *)qdev_get_child_bus(spi_master, "ssi");
+    spi_master = qdev_create(NULL, "litex_ssi");
+    qdev_init_nofail(spi_master);
+    sysbus_mmio_map(SYS_BUS_DEVICE(spi_master), 0, reg_base);
 
-        spi_sdcard = ssi_create_slave_no_init(spi_bus, "ssi-sd");
-        qdev_init_nofail(spi_sdcard);
+    spi_bus = (SSIBus *)qdev_get_child_bus(spi_master, "ssi");
 
-        cs_line = qdev_get_gpio_in_named(spi_sdcard, SSI_GPIO_CS, 0);
-        qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 0, cs_line);
-    }
-#else
-    #error "Blah!"
-#endif
+    spi_sdcard = ssi_create_slave_no_init(spi_bus, "ssi-sd");
+    qdev_init_nofail(spi_sdcard);
 
+    cs_line = qdev_get_gpio_in_named(spi_sdcard, SSI_GPIO_CS, 0);
+    qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 0, cs_line);
 
+    return spi_sdcard;
 }
