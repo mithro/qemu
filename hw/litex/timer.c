@@ -31,16 +31,3 @@ DeviceState *litex_timer_create(hwaddr base, qemu_irq timer0_irq, uint32_t freq_
 
     return dev;
 }
-
-#define MEM_SIZE 0x80000000
-#define MEM_MASK 0x7FFFFFFF
-
-void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
-{
-
-    /* litex timer*/
-#ifdef CSR_TIMER0_BASE
-    litex_timer_create(CSR_TIMER0_BASE & MEM_MASK, irqs[TIMER0_INTERRUPT], SYSTEM_CLOCK_FREQUENCY);
-#endif
-
-}

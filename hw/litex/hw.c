@@ -112,4 +112,8 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
     litex_liteeth_create(CSR_ETHMAC_BASE & MEM_MASK, CSR_ETHPHY_BASE & MEM_MASK, ETHMAC_BASE & MEM_MASK, irqs[ETHMAC_INTERRUPT]);
 #endif
 
+    /* litex timer*/
+#ifdef CSR_TIMER0_BASE
+    litex_timer_create(CSR_TIMER0_BASE & MEM_MASK, irqs[TIMER0_INTERRUPT], SYSTEM_CLOCK_FREQUENCY);
+#endif
 }
