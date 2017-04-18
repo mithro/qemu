@@ -1,0 +1,7 @@
+# LiteX config
+CONFIG_LITEX=y
+
+# LiteX SPI support
+CONFIG_BITBANG_SPI=y
+CONFIG_LITEX_SPI=y
+CONFIG_SSI_M25P80=y
