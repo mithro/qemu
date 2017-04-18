@@ -2,3 +2,5 @@
 
 CONFIG_SERIAL=y
 CONFIG_OPENCORES_ETH=y
+
+include litex.mak
