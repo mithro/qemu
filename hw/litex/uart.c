@@ -19,7 +19,7 @@
 #include "generated/csr.h"
 #include "generated/mem.h"
 
-DeviceState *litex_uart_create(hwaddr base, qemu_irq irq, CharDriverState *chr)
+DeviceState *litex_uart_create(hwaddr base, qemu_irq irq, Chardev *chr)
 {
     DeviceState *dev;
 
