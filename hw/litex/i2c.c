@@ -59,15 +59,3 @@ DeviceState *litex_i2c_create(hwaddr reg_base)
     smbus_eeprom_init(i2c, 1, eeprom_contents, 256);
     return dev;
 }
-
-#define MEM_SIZE 0x80000000
-#define MEM_MASK 0x7FFFFFFF
-
-void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
-{
-
-#ifdef CSR_OPSIS_I2C_BASE
-    litex_i2c_create(CSR_OPSIS_I2C_BASE & MEM_MASK);
-#endif
-
-}
