@@ -51,6 +51,19 @@ mkdir -p build
 		download "firmware debug symbols ($CPU)" $CPU/software/firmware/firmware.elf firmware-$CPU.elf
 		download "flash image ($CPU)" $CPU/flash.bin flash-$CPU.bin
 	done
+	mkdir -p hw
+	cat > hw/common.h <<'EOF'
+#ifndef __HW_COMMON_H
+#define __HW_COMMON_H
+
+#ifdef __ASSEMBLER__
+#define MMPTR(x) x
+#else
+#define MMPTR(x) (*((volatile unsigned int *)(x)))
+#endif
+
+#endif
+EOF
 
 	if [ ! -f config.log -o ! -f Makefile -o ! -f qemu-img ]; then
 		../configure \
