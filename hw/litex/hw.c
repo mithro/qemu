@@ -102,4 +102,14 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
     }
 #endif
 
+
+#ifdef CSR_OPSIS_I2C_BASE
+    litex_i2c_create(CSR_OPSIS_I2C_BASE & MEM_MASK);
+#endif
+
+/* litex ethernet*/
+#ifdef CSR_ETHMAC_BASE
+    litex_liteeth_create(CSR_ETHMAC_BASE & MEM_MASK, CSR_ETHPHY_BASE & MEM_MASK, ETHMAC_BASE & MEM_MASK, irqs[ETHMAC_INTERRUPT]);
+#endif
+
 }

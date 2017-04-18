@@ -35,16 +35,3 @@ DeviceState *litex_liteeth_create(hwaddr reg_base, hwaddr phy_base, hwaddr ethma
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, ethmac_irq);
     return dev;
 }
-
-#define MEM_SIZE 0x80000000
-#define MEM_MASK 0x7FFFFFFF
-
-void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
-{
-
-/* litex ethernet*/
-#ifdef CSR_ETHMAC_BASE
-    litex_liteeth_create(CSR_ETHMAC_BASE & MEM_MASK, CSR_ETHPHY_BASE & MEM_MASK, ETHMAC_BASE & MEM_MASK, irqs[ETHMAC_INTERRUPT]);
-#endif
-
-}
