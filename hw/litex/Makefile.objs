@@ -1,1 +1,10 @@
-obj-y += hw.o
+obj-$(CONFIG_LITEX) += hw.o
+
+obj-$(CONFIG_LITEX) += timer.o
+obj-$(CONFIG_LITEX) += uart.o
+
+obj-$(CONFIG_LITEX_I2C) += i2c.o
+
+obj-$(CONFIG_LITEETH) += liteeth.o
+
+obj-$(CONFIG_LITEX_SPI) += spi.o
