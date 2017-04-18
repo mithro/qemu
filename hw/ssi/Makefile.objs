@@ -7,3 +7,7 @@ common-obj-$(CONFIG_STM32F2XX_SPI) += stm32f2xx_spi.o
 
 obj-$(CONFIG_OMAP) += omap_spi.o
 obj-$(CONFIG_IMX) += imx_spi.o
+
+# Bitbanging SPI support
+config-obj-$(CONFIG_BITBANG_SPI) += bitbang_ssi.o
+config-obj-$(CONFIG_LITEX_SPI) += litex_ssi.o
