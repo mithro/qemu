@@ -16,7 +16,7 @@ static inline DeviceState *litex_pic_init(qemu_irq cpu_irq)
     return dev;
 }
 
-static inline DeviceState *lm32_juart_init(CharDriverState *chr)
+static inline DeviceState *lm32_juart_init(Chardev *chr)
 {
     DeviceState *dev;
 
