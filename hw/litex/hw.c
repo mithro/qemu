@@ -116,4 +116,10 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
 #ifdef CSR_TIMER0_BASE
     litex_timer_create(CSR_TIMER0_BASE & MEM_MASK, irqs[TIMER0_INTERRUPT], SYSTEM_CLOCK_FREQUENCY);
 #endif
+
+    /* litex uart */
+#ifdef CSR_UART_BASE
+    litex_uart_create(CSR_UART_BASE & MEM_MASK, irqs[2 /*UART_INTERRUPT*/], serial_hds[0]);
+#endif
+
 }
