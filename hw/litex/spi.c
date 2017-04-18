@@ -92,4 +92,30 @@ void litex_create_memory(MemoryRegion *address_space_mem, qemu_irq irqs[])
     }
 #endif
 
+
+#define CSR_SPISDCARD_BASE 0xe0015000
+#ifdef CSR_SPISDCARD_BASE
+    {
+        DeviceState *spi_master;
+        DeviceState *spi_sdcard;
+        SSIBus *spi_bus;
+        qemu_irq cs_line;
+
+        spi_master = qdev_create(NULL, "litex_ssi");
+        qdev_init_nofail(spi_master);
+        sysbus_mmio_map(SYS_BUS_DEVICE(spi_master), 0, CSR_SPISDCARD_BASE & MEM_MASK);
+
+        spi_bus = (SSIBus *)qdev_get_child_bus(spi_master, "ssi");
+
+        spi_sdcard = ssi_create_slave_no_init(spi_bus, "ssi-sd");
+        qdev_init_nofail(spi_sdcard);
+
+        cs_line = qdev_get_gpio_in_named(spi_sdcard, SSI_GPIO_CS, 0);
+        qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 0, cs_line);
+    }
+#else
+    #error "Blah!"
+#endif
+
+
 }
