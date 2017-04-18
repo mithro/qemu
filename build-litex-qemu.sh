@@ -54,7 +54,7 @@ mkdir -p build
 
 	if [ ! -f config.log -o ! -f Makefile -o ! -f qemu-img ]; then
 		../configure \
-				--target-list=lm32-softmmu,or32-softmmu \
+				--target-list=lm32-softmmu,or1k-softmmu \
 				--python=/usr/bin/python2 \
 				--enable-fdt \
 				--disable-kvm \
@@ -98,13 +98,8 @@ mkdir -p build
 	echo "To use run something like the following;"
 
 	for CPU in $CPUS; do
-		if [ "$CPU" = "or1k" ]; then
-			QEMU_CPU=or32
-		else
-			QEMU_CPU="$CPU"
-		fi
 		cat <<EOF
- build/$QEMU_CPU-softmmu/qemu-system-$QEMU_CPU \\
+ build/$CPU-softmmu/qemu-system-$CPU \\
         -nographic -nodefaults \\
         -monitor pty \\
         -serial stdio \\
@@ -119,8 +114,6 @@ EOF
 	echo
 	done
 	cat <<'EOF'
-
- Note: QEmu uses or32 while LiteX uses or1k for the OpenRISC architecture
 
 EOF
 
