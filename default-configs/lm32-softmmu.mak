@@ -9,4 +9,4 @@ CONFIG_PFLASH_CFI01=y
 CONFIG_PFLASH_CFI02=y
 CONFIG_SD=y
 
-# LiteX Timer - via CONFIG_LITEX
+include litex.mak
