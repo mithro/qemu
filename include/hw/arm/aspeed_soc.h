@@ -151,6 +151,13 @@ struct AspeedSoCClass {
     /** valid_cpu_types: NULL terminated array of a single CPU type. */
     const char * const *valid_cpu_types;
     uint32_t silicon_rev;
+    /*
+     * When non-NULL, overrides the per-SoC "socname" (otherwise derived from
+     * the QOM type name) used to build child device type names such as
+     * "aspeed.scu-<socname>". The AST2050 sets this to "ast2400" to reuse the
+     * register-compatible AST2400 peripheral models.
+     */
+    const char *qom_socname;
     uint64_t sram_size;
     uint64_t secsram_size;
     int spis_num;

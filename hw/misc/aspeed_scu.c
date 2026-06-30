@@ -555,6 +555,7 @@ static void aspeed_scu_reset(DeviceState *dev)
 static uint32_t aspeed_silicon_revs[] = {
     AST2400_A0_SILICON_REV,
     AST2400_A1_SILICON_REV,
+    AST2050_A1_SILICON_REV,
     AST2500_A0_SILICON_REV,
     AST2500_A1_SILICON_REV,
     AST2600_A0_SILICON_REV,

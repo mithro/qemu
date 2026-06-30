@@ -70,6 +70,24 @@ struct AspeedMachineState {
         SCU_HW_STRAP_VGA_SIZE_SET(VGA_16M_DRAM) |                       \
         SCU_AST2400_HW_STRAP_BOOT_MODE(AST2400_SPI_BOOT))
 
+/*
+ * ASUS KGPE-D16 BMC (AST2050): 128 MB DDR2, 24 MHz input clock, SPI boot.
+ * Modelled on the palmetto straps with AST2050-appropriate DRAM size and the
+ * AST2050's fixed 24 MHz reference clock.
+ */
+#define KGPE_D16_BMC_HW_STRAP1 (                                        \
+        SCU_AST2400_HW_STRAP_DRAM_SIZE(DRAM_SIZE_128MB) |               \
+        SCU_AST2400_HW_STRAP_DRAM_CONFIG(2) |                           \
+        SCU_AST2400_HW_STRAP_ACPI_DIS |                                 \
+        SCU_AST2400_HW_STRAP_SET_CLK_SOURCE(AST2400_CLK_24M_IN) |       \
+        SCU_HW_STRAP_VGA_CLASS_CODE |                                   \
+        SCU_HW_STRAP_LPC_RESET_PIN |                                    \
+        SCU_HW_STRAP_SPI_MODE(SCU_HW_STRAP_SPI_M_S_EN) |                \
+        SCU_AST2400_HW_STRAP_SET_CPU_AHB_RATIO(AST2400_CPU_AHB_RATIO_2_1) | \
+        SCU_HW_STRAP_SPI_WIDTH |                                        \
+        SCU_HW_STRAP_VGA_SIZE_SET(VGA_16M_DRAM) |                       \
+        SCU_AST2400_HW_STRAP_BOOT_MODE(AST2400_SPI_BOOT))
+
 /* TODO: Find the actual hardware value */
 #define SUPERMICROX11_BMC_HW_STRAP1 (                                   \
         SCU_AST2400_HW_STRAP_DRAM_SIZE(DRAM_SIZE_128MB) |               \
@@ -1260,6 +1278,23 @@ static void aspeed_machine_palmetto_class_init(ObjectClass *oc, void *data)
     aspeed_machine_class_init_cpus_defaults(mc);
 };
 
+static void aspeed_machine_kgpe_d16_bmc_class_init(ObjectClass *oc, void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+    AspeedMachineClass *amc = ASPEED_MACHINE_CLASS(oc);
+
+    mc->desc       = "ASUS KGPE-D16 BMC (AST2050, ARM926EJ-S)";
+    amc->soc_name  = "ast2050-a1";
+    amc->hw_strap1 = KGPE_D16_BMC_HW_STRAP1;
+    amc->fmc_model = "mx25l6405d";   /* 8 MB SPI NOR boot flash */
+    amc->spi_model = "mx25l6405d";
+    amc->num_cs    = 1;
+    amc->macs_mask = ASPEED_MAC0_ON; /* single BMC NIC (FTGMAC100) */
+    amc->i2c_init  = palmetto_bmc_i2c_init; /* TODO: D16-specific I2C topology */
+    mc->default_ram_size = 128 * MiB;
+    aspeed_machine_class_init_cpus_defaults(mc);
+}
+
 static void aspeed_machine_quanta_q71l_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -1760,6 +1795,10 @@ static const TypeInfo aspeed_machine_types[] = {
         .name          = MACHINE_TYPE_NAME("palmetto-bmc"),
         .parent        = TYPE_ASPEED_MACHINE,
         .class_init    = aspeed_machine_palmetto_class_init,
+    }, {
+        .name          = MACHINE_TYPE_NAME("kgpe-d16-bmc"),
+        .parent        = TYPE_ASPEED_MACHINE,
+        .class_init    = aspeed_machine_kgpe_d16_bmc_class_init,
     }, {
         .name          = MACHINE_TYPE_NAME("supermicrox11-bmc"),
         .parent        = TYPE_ASPEED_MACHINE,

@@ -148,10 +148,16 @@ static void aspeed_ast2400_soc_init(Object *obj)
     AspeedSoCState *s = ASPEED_SOC(obj);
     AspeedSoCClass *sc = ASPEED_SOC_GET_CLASS(s);
     int i;
-    char socname[8];
+    const char *socname;
+    char socname_buf[8];
     char typename[64];
 
-    if (sscanf(object_get_typename(obj), "%7s", socname) != 1) {
+    if (sc->qom_socname) {
+        /* SoC overrides the child-device socname (e.g. AST2050 -> ast2400) */
+        socname = sc->qom_socname;
+    } else if (sscanf(object_get_typename(obj), "%7s", socname_buf) == 1) {
+        socname = socname_buf;
+    } else {
         g_assert_not_reached();
     }
 
@@ -558,6 +564,40 @@ static void aspeed_soc_ast2500_class_init(ObjectClass *oc, void *data)
     sc->get_irq      = aspeed_soc_ast2400_get_irq;
 }
 
+static void aspeed_soc_ast2050_class_init(ObjectClass *oc, void *data)
+{
+    static const char * const valid_cpu_types[] = {
+        ARM_CPU_TYPE_NAME("arm926"),
+        NULL
+    };
+    AspeedSoCClass *sc = ASPEED_SOC_CLASS(oc);
+    DeviceClass *dc = DEVICE_CLASS(oc);
+
+    dc->realize = aspeed_ast2400_soc_realize;
+    /* Reason: Uses serial_hds and nd_table in realize() directly */
+    dc->user_creatable = false;
+
+    sc->valid_cpu_types = valid_cpu_types;
+    sc->silicon_rev  = AST2050_A1_SILICON_REV;
+    /*
+     * The AST2050 (G3) is register-compatible with the AST2400 (G4) for the
+     * blocks QEMU models, so reuse the AST2400 peripheral device variants by
+     * overriding the child socname.
+     */
+    sc->qom_socname  = "ast2400";
+    sc->sram_size    = 0x8000;
+    sc->spis_num     = 1;
+    sc->ehcis_num    = 1;
+    sc->wdts_num     = 2;
+    sc->macs_num     = 2;
+    sc->uarts_num    = 5;
+    sc->uarts_base   = ASPEED_DEV_UART1;
+    sc->irqmap       = aspeed_soc_ast2400_irqmap;
+    sc->memmap       = aspeed_soc_ast2400_memmap;
+    sc->num_cpus     = 1;
+    sc->get_irq      = aspeed_soc_ast2400_get_irq;
+}
+
 static const TypeInfo aspeed_soc_ast2400_types[] = {
     {
         .name           = TYPE_ASPEED2400_SOC,
@@ -573,6 +613,10 @@ static const TypeInfo aspeed_soc_ast2400_types[] = {
         .name           = "ast2500-a1",
         .parent         = TYPE_ASPEED2400_SOC,
         .class_init     = aspeed_soc_ast2500_class_init,
+    }, {
+        .name           = "ast2050-a1",
+        .parent         = TYPE_ASPEED2400_SOC,
+        .class_init     = aspeed_soc_ast2050_class_init,
     },
 };
 

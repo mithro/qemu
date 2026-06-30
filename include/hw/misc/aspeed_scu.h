@@ -43,6 +43,14 @@ struct AspeedSCUState {
 
 #define AST2400_A0_SILICON_REV   0x02000303U
 #define AST2400_A1_SILICON_REV   0x02010303U
+/*
+ * AST2050 (G3 generation, ARM926EJ-S). Provisional SCU7C revision ID: the
+ * AST2050 predates the AST2400 (0x02xxxxxx), so it is encoded here as family
+ * 0x01. QEMU does not branch on this value (the SCU model only reports it),
+ * so any supported value boots; verify the exact value against AST2050
+ * silicon / the proprietary firmware before relying on chip-ID detection.
+ */
+#define AST2050_A1_SILICON_REV   0x01000303U
 #define AST2500_A0_SILICON_REV   0x04000303U
 #define AST2500_A1_SILICON_REV   0x04010303U
 #define AST2600_A0_SILICON_REV   0x05000303U
