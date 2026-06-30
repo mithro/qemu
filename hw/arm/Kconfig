@@ -137,6 +137,12 @@ config NETDUINOPLUS2
     depends on TCG && ARM
     select STM32F405_SOC
 
+config NS9360
+    bool
+    default y
+    depends on TCG && ARM
+    select PFLASH_CFI01
+
 config OLIMEX_STM32_H405
     bool
     default y
