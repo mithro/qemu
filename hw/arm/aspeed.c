@@ -1286,12 +1286,21 @@ static void aspeed_machine_kgpe_d16_bmc_class_init(ObjectClass *oc, void *data)
     mc->desc       = "ASUS KGPE-D16 BMC (AST2050, ARM926EJ-S)";
     amc->soc_name  = "ast2050-a1";
     amc->hw_strap1 = KGPE_D16_BMC_HW_STRAP1;
-    amc->fmc_model = "mx25l6405d";   /* 8 MB SPI NOR boot flash */
-    amc->spi_model = "mx25l6405d";
+    amc->fmc_model = "mx25l12805d";  /* 16 MB SPI NOR (fits the C4 vendor rootfs) */
+    amc->spi_model = "mx25l12805d";
     amc->num_cs    = 1;
     amc->macs_mask = ASPEED_MAC0_ON; /* single BMC NIC (FTGMAC100) */
     amc->i2c_init  = palmetto_bmc_i2c_init; /* TODO: D16-specific I2C topology */
     mc->default_ram_size = 128 * MiB;
+    /*
+     * Tolerate guest accesses to unmodelled MMIO (return 0 instead of raising
+     * an external abort). The proprietary Dell C410X AST2050 firmware (C4)
+     * pokes the legacy AST2050 SMC controller at 0x16000000 and other AST2050
+     * blocks this AST2400-based model doesn't implement; without this its
+     * ast2050_smc_init takes an external abort and panics. The from-source
+     * stacks (C1-C3) don't touch unmapped regions, so this only adds leniency.
+     */
+    mc->ignore_memory_transaction_failures = true;
     aspeed_machine_class_init_cpus_defaults(mc);
 }
 
