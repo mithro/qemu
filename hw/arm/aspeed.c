@@ -527,6 +527,23 @@ static void palmetto_bmc_i2c_init(AspeedMachineState *bmc)
     object_property_set_int(OBJECT(dev), "temperature3", 110000, &error_abort);
 }
 
+static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
+{
+    AspeedSoCState *soc = bmc->soc;
+    /*
+     * The Dell C410X stores the BMC MAC in a 32KB EEPROM at I2C bus 0 / 0x50
+     * (RE: "EEPROM 0x50+ I2C0: MAC address and board config storage"). The
+     * vendor ftgmac driver reads it and refuses to register eth0 without a
+     * valid MAC ("Fail to get the MAC information!"), so seed a MAC at offset 0
+     * (Avocent OUI 00:e0:81). This lets the proprietary firmware bring up
+     * networking for the C4 web-service check.
+     */
+    uint8_t *eeprom_buf = g_malloc0(32 * 1024);
+    static const uint8_t mac[6] = { 0x00, 0xe0, 0x81, 0x12, 0x34, 0x56 };
+    memcpy(eeprom_buf, mac, sizeof(mac));
+    smbus_eeprom_init_one(aspeed_i2c_get_bus(&soc->i2c, 0), 0x50, eeprom_buf);
+}
+
 static void quanta_q71l_bmc_i2c_init(AspeedMachineState *bmc)
 {
     AspeedSoCState *soc = bmc->soc;
@@ -1290,7 +1307,7 @@ static void aspeed_machine_kgpe_d16_bmc_class_init(ObjectClass *oc, void *data)
     amc->spi_model = "mx25l12805d";
     amc->num_cs    = 1;
     amc->macs_mask = ASPEED_MAC0_ON; /* single BMC NIC (FTGMAC100) */
-    amc->i2c_init  = palmetto_bmc_i2c_init; /* TODO: D16-specific I2C topology */
+    amc->i2c_init  = kgpe_d16_bmc_i2c_init; /* EEPROM@0x50 holds the BMC MAC */
     mc->default_ram_size = 128 * MiB;
     /*
      * Tolerate guest accesses to unmodelled MMIO (return 0 instead of raising
