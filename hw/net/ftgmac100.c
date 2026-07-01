@@ -354,8 +354,19 @@ static uint16_t do_phy_read(FTGMAC100State *s, uint8_t reg)
     case RTL8211E_MII_INER:  /* Interrupt enable */
         val = s->phy_int_mask;
         break;
+    case RTL8211E_MII_PHYSR: /* PHY Specific Status */
+        /*
+         * The vendor (Dell C410X) ftgmac driver reads link/speed/duplex from
+         * the RTL8211E PHY-specific status register, not just BMSR. Report a
+         * resolved link mirroring the emulated carrier so the driver (and the
+         * vendor bonding stack, which uses carrier) brings eth0 up.
+         *   bit15:14 speed (01=100M), bit13 duplex(full), bit11 resolved,
+         *   bit10 link-up.
+         */
+        val = (s->phy_status & MII_BMSR_LINK_ST) ?
+              (0x4000 | 0x2000 | 0x0800 | 0x0400) : 0;
+        break;
     case RTL8211E_MII_PHYCR:
-    case RTL8211E_MII_PHYSR:
     case RTL8211E_MII_RXERC:
     case RTL8211E_MII_LDPSR:
     case RTL8211E_MII_EPAGSR:
