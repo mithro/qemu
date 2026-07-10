@@ -429,6 +429,20 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->smc_g3), 0, 0x16000000);
     }
 
+    /*
+     * AST2050 (G3) USB2.0 device / virtual-hub controller at 0x1E6A0000 (the BMC
+     * virtual-media / virtual-HID datapath). Mainline QEMU leaves this unmapped;
+     * the G3 has no EHCI so all USB is via this block. See qemu-model/peripherals/usb.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(OBJECT(dev), "udc-g3", &a->udc_g3,
+                                TYPE_ASPEED_UDC_AST2050);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->udc_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->udc_g3), 0, 0x1E6A0000);
+    }
+
     /* Timer */
     object_property_set_link(OBJECT(&s->timerctrl), "scu", OBJECT(&s->scu),
                              &error_abort);
