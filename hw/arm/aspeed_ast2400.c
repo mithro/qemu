@@ -328,6 +328,24 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&a->vic), 1,
                        qdev_get_gpio_in(DEVICE(&a->cpu), ARM_CPU_FIQ));
 
+    /*
+     * AST2050 (G3) PWM/tachometer. Mainline QEMU leaves 0x1E786000 unmapped; the
+     * real AST2050 has 4 PWM + 16 tach here, which OpenBMC uses for fan hwmon. A
+     * dedicated G3 device, keyed on the silicon revision so AST2400/2500 are
+     * unchanged. See qemu-model/peripherals/pwm.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(OBJECT(dev), "pwm", &a->pwm_g3,
+                                TYPE_ASPEED_PWM_AST2050);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->pwm_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->pwm_g3), 0,
+                        sc->memmap[ASPEED_DEV_PWM]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->pwm_g3), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_PWM));
+    }
+
     /* RTC */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
         return;
