@@ -423,12 +423,14 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     }
 
     /*
-     * AST2050 (G3) legacy SMC (SPI flash controller) control registers at
-     * 0x16000000. Mainline QEMU models only the AST2400 FMC (0x1E620000); the
-     * G3's legacy SMC is a distinct block that the vendor firmware pokes at init
-     * (previously it hit unmapped MMIO and relied on the machine's tolerate-
-     * unmapped flag). The flash *data* windows (0x10000000 etc.) are deferred.
-     * See qemu-model/peripherals/smc.
+     * AST2050 (G3) legacy SMC (SPI flash controller): control registers at
+     * 0x16000000 and the CE2 SPI flash window at 0x14000000. Mainline QEMU models
+     * only the AST2400 FMC (0x1E620000); the G3's legacy SMC is a distinct block.
+     * The vendor firmware reads the flash JEDEC ID via UMA (user mode) byte-banging
+     * the 0x14000000 window; the window forwards each byte to the on-board
+     * mx25l12805d (JEDEC 0xC22018), so the ID reads correctly instead of 0 (which
+     * previously caused a non-fatal div0 in aess_write_spi_nor_flash). Our modern
+     * kernel uses the FMC, not this legacy SMC. See qemu-model/peripherals/smc.
      */
     if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
         object_initialize_child(OBJECT(dev), "smc-g3", &a->smc_g3,
@@ -437,6 +439,7 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
             return;
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->smc_g3), 0, 0x16000000);
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->smc_g3), 1, 0x10000000);
     }
 
     /*
