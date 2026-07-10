@@ -192,16 +192,18 @@ static void aspeed_ast2400_soc_init(Object *obj)
      * trigger-config registers to 0, as real silicon does -- but the mainline
      * `aspeed,ast2400-vic` kernel driver treats the trigger config as fixed
      * hardware defaults and cannot program the compact G3 VIC, so with a 0 reset
-     * the timer IRQ (rising-edge) never fires and Linux hangs. This is now
-     * resolved end-to-end: the AST2050 uses the faithful G3 VIC
-     * (TYPE_ASPEED_2050_VIC — trigger config RW, reset 0), our kernel binds it
-     * via the irq-aspeed-g3-vic driver (which programs SENSE/DUAL/EVENT) with the
-     * `aspeed,ast2050-vic` DTS node. AST2400/2500 keep TYPE_ASPEED_VIC. C4 (the
-     * vendor G3 firmware programs the VIC itself) is unaffected.
+     * the timer IRQ (rising-edge) never fires and Linux hangs.
+     *
+     * Our modern kernel + the irq-aspeed-g3-vic driver DO drive the faithful G3
+     * VIC (TYPE_ASPEED_2050_VIC) fine (C2/C2-full/C5 verified). But wiring it
+     * breaks the proprietary C410X firmware boot (C4): the vendor kernel oops's
+     * (div0 in aess_write_spi_nor_flash during ftgmac100_open) and reboots. C4 is
+     * an UNPATCHABLE legacy-boot oracle, so per qemu-must-model-real-hardware we
+     * keep the AST2400 VIC here until the G3 VIC can be validated against the
+     * KGPE-D16's own firmware (Raptor/C3). The G3 VIC model + irq-aspeed-g3-vic
+     * driver + DATASHEET-VIC.md remain in-tree as the ready co-evolution.
      */
-    object_initialize_child(obj, "vic", &a->vic,
-                            sc->silicon_rev == AST2050_A1_SILICON_REV ?
-                            TYPE_ASPEED_2050_VIC : TYPE_ASPEED_VIC);
+    object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
 
     /*
      * The AST2050 (G3) has a counter-style RTC (created in realize); AST2400/2500
