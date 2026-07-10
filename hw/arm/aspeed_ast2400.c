@@ -276,7 +276,15 @@ static void aspeed_ast2400_soc_init(Object *obj)
                                 TYPE_SYSBUS_SDHCI);
     }
 
-    object_initialize_child(obj, "lpc", &s->lpc, TYPE_ASPEED_LPC);
+    /*
+     * The AST2050 (G3) uses its own LPC layout (aspeed.lpc-ast2050, created in
+     * realize); the AST2400 aspeed_lpc puts KCS/iBT at the wrong 0x140 offsets.
+     * Gate the AST2400 LPC out of _init too, or realize would assert on an
+     * un-realized child.
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "lpc", &s->lpc, TYPE_ASPEED_LPC);
+    }
 
     snprintf(typename, sizeof(typename), "aspeed.hace-%s", socname);
     object_initialize_child(obj, "hace", &s->hace, typename);
@@ -573,35 +581,54 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                        aspeed_soc_get_irq(s, ASPEED_DEV_SDHCI));
 
     /* LPC */
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->lpc), errp)) {
-        return;
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->lpc), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->lpc), 0,
+                        sc->memmap[ASPEED_DEV_LPC]);
+
+        /* Connect the LPC IRQ to the VIC */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_LPC));
+
+        /*
+         * On the AST2400 and AST2500 the one LPC IRQ is shared between all of
+         * the subdevices. Connect the LPC subdevice IRQs to the LPC controller
+         * IRQ (by contrast, on the AST2600, the subdevice IRQs are connected
+         * straight to the GIC).
+         *
+         * LPC subdevice IRQ sources are offset from 1 because the shared IRQ
+         * output to the VIC is at offset 0.
+         */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_1,
+                           qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_1));
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_2,
+                           qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_2));
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_3,
+                           qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_3));
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_4,
+                           qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_4));
+    } else {
+        /*
+         * AST2050 (G3) LPC: KCS/BT/iLPC2AHB at the G3 register offsets
+         * (0x24-0x8C), not the AST2400 0x140. Register-accurate model (there is
+         * no LPC host in this machine); the shared LPC IRQ goes to the VIC.
+         * See qemu-model/peripherals/lpc.
+         */
+        object_initialize_child(OBJECT(dev), "lpc-g3", &a->lpc_g3,
+                                TYPE_ASPEED_LPC_AST2050);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->lpc_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->lpc_g3), 0,
+                        sc->memmap[ASPEED_DEV_LPC]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->lpc_g3), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_LPC));
     }
-    aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->lpc), 0, sc->memmap[ASPEED_DEV_LPC]);
-
-    /* Connect the LPC IRQ to the VIC */
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 0,
-                       aspeed_soc_get_irq(s, ASPEED_DEV_LPC));
-
-    /*
-     * On the AST2400 and AST2500 the one LPC IRQ is shared between all of the
-     * subdevices. Connect the LPC subdevice IRQs to the LPC controller IRQ (by
-     * contrast, on the AST2600, the subdevice IRQs are connected straight to
-     * the GIC).
-     *
-     * LPC subdevice IRQ sources are offset from 1 because the shared IRQ output
-     * to the VIC is at offset 0.
-     */
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_1,
-                       qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_1));
-
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_2,
-                       qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_2));
-
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_3,
-                       qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_3));
-
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->lpc), 1 + aspeed_lpc_kcs_4,
-                       qdev_get_gpio_in(DEVICE(&s->lpc), aspeed_lpc_kcs_4));
 
     /* HACE */
     object_property_set_link(OBJECT(&s->hace), "dram", OBJECT(s->dram_mr),
