@@ -187,12 +187,18 @@ static void aspeed_ast2400_soc_init(Object *obj)
     object_property_add_alias(obj, "hw-prot-key", OBJECT(&s->scu),
                               "hw-prot-key");
 
-    /* AST2050 (G3) uses the single-bank VIC variant (see aspeed_vic.c). */
-    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
-        object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_2050_VIC);
-    } else {
-        object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
-    }
+    /*
+     * NOTE: the faithful single-bank G3 VIC (TYPE_ASPEED_2050_VIC) resets its
+     * trigger-config registers to 0, as real silicon does -- but the mainline
+     * `aspeed,ast2400-vic` kernel driver treats the trigger config as fixed
+     * hardware defaults and cannot program the compact G3 VIC, so with a 0 reset
+     * the timer IRQ (rising-edge) never fires and Linux hangs. Wiring the G3 VIC
+     * therefore requires a matching G3 kernel driver (irq-aspeed-g3-vic) + DTS
+     * (`aspeed,ast2050-vic`). Until that lands end-to-end, keep the AST2400 VIC so
+     * the C1-C4 boots stay green. The G3 VIC model + its fwtest remain available
+     * (see qemu-model/peripherals/vic and the G3-VIC-end-to-end task).
+     */
+    object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
 
     object_initialize_child(obj, "rtc", &s->rtc, TYPE_ASPEED_RTC);
 
