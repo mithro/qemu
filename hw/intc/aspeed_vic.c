@@ -212,6 +212,29 @@ static void aspeed_vic_write(void *opaque, hwaddr offset, uint64_t data,
         data &= AVIC_L_MASK;
     }
 
+    /*
+     * AST2050 (G3): sensitivity (0x24) / both-edge (0x28) / event (0x2C) are
+     * 32-bit, fully writable and reset to 0 (datasheet §16) -- unlike the
+     * AST2400, which hardwires them and treats 0x24/0x28 as read-only. Store the
+     * (already low-masked) word and re-evaluate. See qemu-model/peripherals/vic.
+     */
+    if (s->ast2050) {
+        switch (n_offset) {
+        case 0x24:
+            s->sense = data;
+            aspeed_vic_update(s);
+            return;
+        case 0x28:
+            s->dual_edge = data;
+            aspeed_vic_update(s);
+            return;
+        case 0x2c:
+            s->event = data;
+            aspeed_vic_update(s);
+            return;
+        }
+    }
+
     switch (n_offset) {
     case 0x98: /* Interrupt Selection */
     case 0x0c:
@@ -300,9 +323,16 @@ static void aspeed_vic_reset(DeviceState *dev)
     s->select = 0;
     s->enable = 0;
     s->trigger = 0;
-    s->sense = 0x1F07FFF8FFFFULL;
-    s->dual_edge = 0xF800070000ULL;
-    s->event = 0x5F07FFF8FFFFULL;
+    if (s->ast2050) {
+        /* AST2050 (G3): trigger-config registers reset to 0 (datasheet §16). */
+        s->sense = 0;
+        s->dual_edge = 0;
+        s->event = 0;
+    } else {
+        s->sense = 0x1F07FFF8FFFFULL;
+        s->dual_edge = 0xF800070000ULL;
+        s->event = 0x5F07FFF8FFFFULL;
+    }
 }
 
 #define AVIC_IO_REGION_SIZE 0x20000
@@ -355,9 +385,21 @@ static const TypeInfo aspeed_vic_info = {
     .class_init = aspeed_vic_class_init,
 };
 
+static void aspeed_vic_2050_init(Object *obj)
+{
+    ASPEED_VIC(obj)->ast2050 = true;
+}
+
+static const TypeInfo aspeed_vic_2050_info = {
+    .name = TYPE_ASPEED_2050_VIC,
+    .parent = TYPE_ASPEED_VIC,
+    .instance_init = aspeed_vic_2050_init,
+};
+
 static void aspeed_vic_register_types(void)
 {
     type_register_static(&aspeed_vic_info);
+    type_register_static(&aspeed_vic_2050_info);
 }
 
 type_init(aspeed_vic_register_types);

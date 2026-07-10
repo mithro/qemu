@@ -187,7 +187,12 @@ static void aspeed_ast2400_soc_init(Object *obj)
     object_property_add_alias(obj, "hw-prot-key", OBJECT(&s->scu),
                               "hw-prot-key");
 
-    object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
+    /* AST2050 (G3) uses the single-bank VIC variant (see aspeed_vic.c). */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_2050_VIC);
+    } else {
+        object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
+    }
 
     object_initialize_child(obj, "rtc", &s->rtc, TYPE_ASPEED_RTC);
 
