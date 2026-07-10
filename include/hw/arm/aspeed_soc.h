@@ -20,6 +20,7 @@
 #include "hw/misc/aspeed_pwm_ast2050.h"
 #include "hw/misc/aspeed_video_ast2050.h"
 #include "hw/misc/aspeed_rtc_ast2050.h"
+#include "hw/misc/aspeed_smc_ast2050.h"
 #include "hw/adc/aspeed_adc.h"
 #include "hw/misc/aspeed_sdmc.h"
 #include "hw/misc/aspeed_xdma.h"
@@ -115,6 +116,7 @@ struct Aspeed2400SoCState {
     AspeedPWMAST2050State pwm_g3;     /* AST2050 (G3) only; created in realize */
     AspeedVideoAST2050State video_g3; /* AST2050 (G3) only; created in realize */
     AspeedRtcAST2050State rtc_g3;     /* AST2050 (G3) only; created in realize */
+    AspeedSMCAST2050State smc_g3;     /* AST2050 (G3) legacy SMC @0x16000000 */
 };
 
 #define TYPE_ASPEED2400_SOC "aspeed2400-soc"

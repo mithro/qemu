@@ -136,6 +136,7 @@ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files(
   'aspeed_pwm_ast2050.c',
   'aspeed_video_ast2050.c',
   'aspeed_rtc_ast2050.c',
+  'aspeed_smc_ast2050.c',
   'aspeed_sbc.c',
   'aspeed_sdmc.c',
   'aspeed_xdma.c',

@@ -404,6 +404,23 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                            aspeed_soc_get_irq(s, ASPEED_DEV_RTC));
     }
 
+    /*
+     * AST2050 (G3) legacy SMC (SPI flash controller) control registers at
+     * 0x16000000. Mainline QEMU models only the AST2400 FMC (0x1E620000); the
+     * G3's legacy SMC is a distinct block that the vendor firmware pokes at init
+     * (previously it hit unmapped MMIO and relied on the machine's tolerate-
+     * unmapped flag). The flash *data* windows (0x10000000 etc.) are deferred.
+     * See qemu-model/peripherals/smc.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(OBJECT(dev), "smc-g3", &a->smc_g3,
+                                TYPE_ASPEED_SMC_AST2050);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->smc_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->smc_g3), 0, 0x16000000);
+    }
+
     /* Timer */
     object_property_set_link(OBJECT(&s->timerctrl), "scu", OBJECT(&s->scu),
                              &error_abort);
