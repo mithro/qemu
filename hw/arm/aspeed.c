@@ -1308,7 +1308,14 @@ static void aspeed_machine_kgpe_d16_bmc_class_init(ObjectClass *oc, void *data)
     amc->num_cs    = 1;
     amc->macs_mask = ASPEED_MAC0_ON; /* single BMC NIC (FTGMAC100) */
     amc->i2c_init  = kgpe_d16_bmc_i2c_init; /* EEPROM@0x50 holds the BMC MAC */
-    mc->default_ram_size = 128 * MiB;
+    /*
+     * 64 MB DDR2 — the real KGPE-D16 BMC size, hardware-verified 2026-07-08
+     * (culvert P2A: the real chip is 4-bank/64 MB, MCR04=0x00000585, and reads
+     * alias mod 64 MB). NOT 128 MB (an earlier wrong assumption). This is the
+     * faithful AST2050 DRAM; note modern OpenBMC does not fit in 64 MB, which is
+     * itself a real finding about running OpenBMC on this board.
+     */
+    mc->default_ram_size = 64 * MiB;
     /*
      * Tolerate guest accesses to unmodelled MMIO (return 0 instead of raising
      * an external abort). The proprietary Dell C410X AST2050 firmware (C4)
