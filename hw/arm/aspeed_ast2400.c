@@ -188,20 +188,23 @@ static void aspeed_ast2400_soc_init(Object *obj)
                               "hw-prot-key");
 
     /*
-     * NOTE: the faithful single-bank G3 VIC (TYPE_ASPEED_2050_VIC) resets its
-     * trigger-config registers to 0, as real silicon does -- but the mainline
-     * `aspeed,ast2400-vic` kernel driver treats the trigger config as fixed
-     * hardware defaults and cannot program the compact G3 VIC, so with a 0 reset
-     * the timer IRQ (rising-edge) never fires and Linux hangs.
+     * The faithful single-bank G3 VIC (TYPE_ASPEED_2050_VIC) register model is
+     * HARDWARE-CONFIRMED against the real KGPE-D16 AST2050 over JTAG: sense/dual/
+     * event reset to 0 and are fully writable (the AST2400 VIC hardwires them
+     * non-zero/read-only). See qemu-model/results/vic-hardware-crosscheck.md.
      *
-     * Our modern kernel + the irq-aspeed-g3-vic driver DO drive the faithful G3
-     * VIC (TYPE_ASPEED_2050_VIC) fine (C2/C2-full/C5 verified). But wiring it
-     * breaks the proprietary C410X firmware boot (C4): the vendor kernel oops's
-     * (div0 in aess_write_spi_nor_flash during ftgmac100_open) and reboots. C4 is
-     * an UNPATCHABLE legacy-boot oracle, so per qemu-must-model-real-hardware we
-     * keep the AST2400 VIC here until the G3 VIC can be validated against the
-     * KGPE-D16's own firmware (Raptor/C3). The G3 VIC model + irq-aspeed-g3-vic
-     * driver + DATASHEET-VIC.md remain in-tree as the ready co-evolution.
+     * It is still NOT wired here, because wiring it *alone* breaks the proprietary
+     * C410X boot (C4) -- but NOT for the reason previously believed. The div0 in
+     * aess_write_spi_nor_flash is the UNMODELLED legacy SMC/SPI-NOR (flash ID reads
+     * 0), and it happens on the AST2400 VIC too (non-fatal there). The real block
+     * is IRQ *routing*: this SoC uses the AST2400 irqmap, which wires UART2-4 to
+     * lines 32-34 and TIMER4-8 to 35-39 -- above the G3's single 32-bit bank, so
+     * those raise raw bits the guest can never see. On the faithful G3 VIC the
+     * vendor firmware then hangs and the watchdog resets it at ~16 s. Completing
+     * the G3 VIC needs its own Table-36 irqmap (+ matching DTS interrupt numbers
+     * for our kernel) and the legacy SMC model; until then keep the AST2400 VIC so
+     * every legacy boot stays green (qemu-must-model-real-hardware). The G3 model +
+     * the combinational-level fix in aspeed_vic.c remain in-tree, ready.
      */
     object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
 

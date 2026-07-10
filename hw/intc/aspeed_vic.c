@@ -56,6 +56,29 @@ static void aspeed_vic_update(AspeedVICState *s)
     qemu_set_irq(s->irq, !!flags);
 }
 
+/*
+ * AST2050 (G3): level sensitivity is *combinational* — the raw-pending bit of a
+ * level-sensitive source tracks the (polarity-adjusted) input line continuously,
+ * not only on line transitions. Re-derive raw for the level sources from the
+ * tracked line level whenever sensitivity/event change. This matters because the
+ * G3 registers reset to 0 (all edge) and firmware programs them later: a level
+ * line held asserted-and-static across the "sense: edge -> level" reprogram would
+ * otherwise never be latched into raw (aspeed_vic_set_irq only fires on line
+ * transitions), losing the interrupt. Real silicon (and the AST2400, whose sense
+ * is non-zero from reset) never exposes that gap; the faithful G3 model closes it
+ * here. Verified against the Dell C410X vendor firmware (see
+ * qemu-model/results/vic-hardware-crosscheck.md).
+ */
+static void aspeed_vic_2050_reeval_level(AspeedVICState *s)
+{
+    uint32_t level_srcs = s->sense;                 /* sense=1 => level */
+    uint32_t lvl = s->level;
+    uint32_t evt = s->event;
+    /* event=1: active-high (line high => pending); event=0: active-low. */
+    uint32_t active = (evt & lvl) | (~evt & ~lvl);
+    s->raw = (s->raw & ~(uint64_t)level_srcs) | (uint64_t)(active & level_srcs);
+}
+
 static void aspeed_vic_set_irq(void *opaque, int irq, int level)
 {
     uint64_t irq_mask;
@@ -222,14 +245,16 @@ static void aspeed_vic_write(void *opaque, hwaddr offset, uint64_t data,
         switch (n_offset) {
         case 0x24:
             s->sense = data;
+            aspeed_vic_2050_reeval_level(s);   /* combinational level detect */
             aspeed_vic_update(s);
             return;
         case 0x28:
-            s->dual_edge = data;
+            s->dual_edge = data;               /* affects edge sources only */
             aspeed_vic_update(s);
             return;
         case 0x2c:
             s->event = data;
+            aspeed_vic_2050_reeval_level(s);   /* polarity change re-latches */
             aspeed_vic_update(s);
             return;
         }
