@@ -193,18 +193,20 @@ static void aspeed_ast2400_soc_init(Object *obj)
      * event reset to 0 and are fully writable (the AST2400 VIC hardwires them
      * non-zero/read-only). See qemu-model/results/vic-hardware-crosscheck.md.
      *
-     * It is still NOT wired here, because wiring it *alone* breaks the proprietary
-     * C410X boot (C4) -- but NOT for the reason previously believed. The div0 in
-     * aess_write_spi_nor_flash is the UNMODELLED legacy SMC/SPI-NOR (flash ID reads
-     * 0), and it happens on the AST2400 VIC too (non-fatal there). The real block
-     * is IRQ *routing*: this SoC uses the AST2400 irqmap, which wires UART2-4 to
-     * lines 32-34 and TIMER4-8 to 35-39 -- above the G3's single 32-bit bank, so
-     * those raise raw bits the guest can never see. On the faithful G3 VIC the
-     * vendor firmware then hangs and the watchdog resets it at ~16 s. Completing
-     * the G3 VIC needs its own Table-36 irqmap (+ matching DTS interrupt numbers
-     * for our kernel) and the legacy SMC model; until then keep the AST2400 VIC so
-     * every legacy boot stays green (qemu-must-model-real-hardware). The G3 model +
-     * the combinational-level fix in aspeed_vic.c remain in-tree, ready.
+     * It is still NOT wired here, because wiring it *alone* hangs the proprietary
+     * C410X boot (C4): with the G3 VIC the vendor firmware reaches BusyBox then its
+     * main thread blocks after line 151 and the watchdog resets it at ~16 s. The
+     * cause is NOT yet pinned -- investigation *ruled out* every concrete theory:
+     * the div0 (it's the unmodelled legacy SMC, fires on the AST2400 VIC too,
+     * non-fatal), the combinational-level fix (disabling it changed nothing),
+     * 0x14/0x38 read semantics (JTAG-confirmed both read 0, matching the model),
+     * and the irqmap (every vendor-used device maps to Table-36 lines <=31 on both
+     * models; UART2-4/TIMER4-8 on 32-39 are unused by the vendor). The two VIC types
+     * present identical vendor-visible state yet diverge; pinning it needs a
+     * trace-diff of AST2400 vs G3 VIC events or gdb into the 2.6.23 vendor kernel.
+     * Until then keep the AST2400 VIC so every legacy boot stays green
+     * (qemu-must-model-real-hardware). The G3 model + the combinational-level fix in
+     * aspeed_vic.c remain in-tree, ready.
      */
     object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
 
