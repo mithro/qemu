@@ -200,7 +200,13 @@ static void aspeed_ast2400_soc_init(Object *obj)
      */
     object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
 
-    object_initialize_child(obj, "rtc", &s->rtc, TYPE_ASPEED_RTC);
+    /*
+     * The AST2050 (G3) has a counter-style RTC (created in realize); AST2400/2500
+     * keep the BCD/CMOS aspeed_rtc. Only create the stub when it will be realized.
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "rtc", &s->rtc, TYPE_ASPEED_RTC);
+    }
 
     snprintf(typename, sizeof(typename), "aspeed.timer-%s", socname);
     object_initialize_child(obj, "timerctrl", &s->timerctrl, typename);
@@ -370,12 +376,25 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     }
 
     /* RTC */
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
-        return;
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        /* AST2050 (G3) counter-style RTC; see qemu-model/peripherals/rtc. */
+        object_initialize_child(OBJECT(dev), "rtc-g3", &a->rtc_g3,
+                                TYPE_ASPEED_RTC_AST2050);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->rtc_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->rtc_g3), 0,
+                        sc->memmap[ASPEED_DEV_RTC]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->rtc_g3), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_RTC));
+    } else {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->rtc), 0, sc->memmap[ASPEED_DEV_RTC]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->rtc), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_RTC));
     }
-    aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->rtc), 0, sc->memmap[ASPEED_DEV_RTC]);
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->rtc), 0,
-                       aspeed_soc_get_irq(s, ASPEED_DEV_RTC));
 
     /* Timer */
     object_property_set_link(OBJECT(&s->timerctrl), "scu", OBJECT(&s->scu),
