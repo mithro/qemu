@@ -268,7 +268,14 @@ static void aspeed_ast2400_soc_init(Object *obj)
     object_initialize_child(obj, "hace", &s->hace, typename);
 
     object_initialize_child(obj, "iomem", &s->iomem, TYPE_UNIMPLEMENTED_DEVICE);
-    object_initialize_child(obj, "video", &s->video, TYPE_UNIMPLEMENTED_DEVICE);
+    /*
+     * The AST2050 (G3) gets a real video engine (created in realize); the
+     * AST2400/2500 keep the unimplemented stub. Only create the stub when it will
+     * be realized, or qdev's realize assertion fires.
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "video", &s->video, TYPE_UNIMPLEMENTED_DEVICE);
+    }
 }
 
 static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
@@ -290,9 +297,25 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                                   sc->memmap[ASPEED_DEV_IOMEM],
                                   ASPEED_SOC_IOMEM_SIZE);
 
-    /* Video engine stub */
-    aspeed_mmio_map_unimplemented(s, SYS_BUS_DEVICE(&s->video), "aspeed.video",
-                                  sc->memmap[ASPEED_DEV_VIDEO], 0x1000);
+    /*
+     * Video engine. The AST2050 (G3) has a real video engine (KVM screen capture)
+     * that OpenBMC's aspeed-video driver uses; give it a real device (VR000
+     * protection-key + RW registers). AST2400/2500 keep the unimplemented stub.
+     * The capture IRQ (INT7) is left unconnected pending the capture behaviour.
+     * See qemu-model/peripherals/video.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(OBJECT(dev), "video-g3", &a->video_g3,
+                                TYPE_ASPEED_VIDEO_AST2050);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->video_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->video_g3), 0,
+                        sc->memmap[ASPEED_DEV_VIDEO]);
+    } else {
+        aspeed_mmio_map_unimplemented(s, SYS_BUS_DEVICE(&s->video), "aspeed.video",
+                                      sc->memmap[ASPEED_DEV_VIDEO], 0x1000);
+    }
 
     /* CPU */
     for (i = 0; i < sc->num_cpus; i++) {
