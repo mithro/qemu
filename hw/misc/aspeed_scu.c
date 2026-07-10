@@ -211,6 +211,29 @@ static const uint32_t ast2400_a0_resets[ASPEED_SCU_NR_REGS] = {
      [BMC_DEV_ID]      = 0x00002402U
 };
 
+/*
+ * AST2050 / AST1100 (G3) reset ("Init =") values, from the AST2050 A3 datasheet
+ * V1.05 §18 (pp.204-220) — see qemu-model/peripherals/scu/DATASHEET-SCU.md.
+ * These differ from the AST2400 (G4) table above: the AST2050 register file ends
+ * at 0x7C (no PINMUX_CTRL2+/WDT/FREE_CNTR/CPU2/UART_HPLL_CLK/PCIE blocks), 0x74 is
+ * Multi-function Pin Control #1 (not RNG), and several reset values differ. Only
+ * the datasheet-documented G3 registers are seeded; PROT_KEY, HW_STRAP1 and
+ * SILICON_REV are overwritten from properties in aspeed_scu_reset().
+ */
+static const uint32_t ast2050_a3_resets[ASPEED_SCU_NR_REGS] = {
+     [SYS_RST_CTRL]    = 0x000FFE5CU, /* SCU04 p205                          */
+     [CLK_SEL]         = 0xE3F00070U, /* SCU08 p207                          */
+     [CLK_STOP_CTRL]   = 0x000C3E8BU, /* SCU0C p209                          */
+     [D2PLL_PARAM]     = 0x0000001BU, /* SCU1C = 32.768kHz err-correct p211  */
+     [MPLL_PARAM]      = 0x00004291U, /* SCU20 p212 (post-div /2 -> 133 MHz) */
+     [HPLL_PARAM]      = 0x00004291U, /* SCU24 p212                          */
+     [PCI_CTRL1]       = 0x20001A03U, /* SCU30 p214 (ASPEED vendor/device)   */
+     [PCI_CTRL2]       = 0x20001A03U, /* SCU34 p214                          */
+     [PCI_CTRL3]       = 0x03000000U, /* SCU38 p215                          */
+     [SYS_RST_STATUS]  = 0x00000001U, /* SCU3C p215 power-on-reset flag       */
+     [RNG_CTRL]        = 0x40048000U, /* SCU74 = Pin-mux Control #1 p219      */
+};
+
 /* SCU70 bit 23: 0 24Mhz. bit 11:9: 0b001 AXI:ABH ratio 2:1 */
 /* AST2500 revision A1 */
 
@@ -658,6 +681,37 @@ static const TypeInfo aspeed_2400_scu_info = {
     .parent = TYPE_ASPEED_SCU,
     .instance_size = sizeof(AspeedSCUState),
     .class_init = aspeed_2400_scu_class_init,
+};
+
+static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    AspeedSCUClass *asc = ASPEED_SCU_CLASS(klass);
+
+    dc->desc = "ASPEED 2050 (G3) System Control Unit";
+    asc->resets = ast2050_a3_resets;
+    /*
+     * Reuse the AST2400 clock helpers: the AST2050 shares the H-PLL/M-PLL
+     * (2-OD)*(N+2)/(D+1) core formula, and at reset SCU24[18]=0 so the CPU clock
+     * comes from the SCU70[11:9] strap (the programmed 0x4291 is not applied) --
+     * identical to the AST2400 strap path. The AST2050 PLL post-divider [14:12]
+     * only affects the *programmed* path (bit18=1), which reset does not use; it
+     * is modelled when the timer clock-rate fidelity is validated. CLKIN is the
+     * fixed 24 MHz reference (clkin_25Mhz=false; no 24/25/48 MHz strap on G3).
+     */
+    asc->calc_hpll = aspeed_2400_scu_calc_hpll;
+    asc->get_apb = aspeed_2400_scu_get_apb_freq;
+    asc->apb_divider = 2;
+    asc->nr_regs = ASPEED_SCU_NR_REGS;
+    asc->clkin_25Mhz = false;
+    asc->ops = &aspeed_ast2400_scu_ops;
+}
+
+static const TypeInfo aspeed_2050_scu_info = {
+    .name = TYPE_ASPEED_2050_SCU,
+    .parent = TYPE_ASPEED_SCU,
+    .instance_size = sizeof(AspeedSCUState),
+    .class_init = aspeed_2050_scu_class_init,
 };
 
 static void aspeed_2500_scu_class_init(ObjectClass *klass, void *data)
@@ -1154,6 +1208,7 @@ static void aspeed_scu_register_types(void)
 {
     type_register_static(&aspeed_scu_info);
     type_register_static(&aspeed_2400_scu_info);
+    type_register_static(&aspeed_2050_scu_info);
     type_register_static(&aspeed_2500_scu_info);
     type_register_static(&aspeed_2600_scu_info);
     type_register_static(&aspeed_1030_scu_info);

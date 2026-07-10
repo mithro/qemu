@@ -166,8 +166,18 @@ static void aspeed_ast2400_soc_init(Object *obj)
                                 aspeed_soc_cpu_type(sc));
     }
 
-    snprintf(typename, sizeof(typename), "aspeed.scu-%s", socname);
-    object_initialize_child(obj, "scu", &s->scu, typename);
+    /*
+     * The AST2050 (G3) reuses the AST2400 child devices via qom_socname="ast2400",
+     * but its SCU reset values and clock tree differ (datasheet §18), so it gets a
+     * dedicated aspeed.scu-ast2050 model. Keyed on the AST2050 silicon revision so
+     * only the G3 SoC selects it; the AST2400/2500 continue to use their own SCU.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "scu", &s->scu, TYPE_ASPEED_2050_SCU);
+    } else {
+        snprintf(typename, sizeof(typename), "aspeed.scu-%s", socname);
+        object_initialize_child(obj, "scu", &s->scu, typename);
+    }
     qdev_prop_set_uint32(DEVICE(&s->scu), "silicon-rev",
                          sc->silicon_rev);
     object_property_add_alias(obj, "hw-strap1", OBJECT(&s->scu),
