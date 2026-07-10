@@ -193,22 +193,24 @@ static void aspeed_ast2400_soc_init(Object *obj)
      * event reset to 0 and are fully writable (the AST2400 VIC hardwires them
      * non-zero/read-only). See qemu-model/results/vic-hardware-crosscheck.md.
      *
-     * It is still NOT wired here, because wiring it *alone* hangs the proprietary
-     * C410X boot (C4): with the G3 VIC the vendor firmware reaches BusyBox then its
-     * main thread blocks after line 151 and the watchdog resets it at ~16 s. The
-     * cause is NOT yet pinned -- investigation *ruled out* every concrete theory:
-     * the div0 (it's the unmodelled legacy SMC, fires on the AST2400 VIC too,
-     * non-fatal), the combinational-level fix (disabling it changed nothing),
-     * 0x14/0x38 read semantics (JTAG-confirmed both read 0, matching the model),
-     * and the irqmap (every vendor-used device maps to Table-36 lines <=31 on both
-     * models; UART2-4/TIMER4-8 on 32-39 are unused by the vendor). The two VIC types
-     * present identical vendor-visible state yet diverge; pinning it needs a
-     * trace-diff of AST2400 vs G3 VIC events or gdb into the 2.6.23 vendor kernel.
-     * Until then keep the AST2400 VIC so every legacy boot stays green
-     * (qemu-must-model-real-hardware). The G3 model + the combinational-level fix in
-     * aspeed_vic.c remain in-tree, ready.
+     * WIRED for the AST2050. Wiring it earlier hung the proprietary C410X boot (C4)
+     * -- the vendor firmware WDT-reset at ~17 s -- but that was NOT a VIC bug: the
+     * root cause was the timer model. QEMU's aspeed_timer toggled its IRQ line each
+     * expiry, which only yields one interrupt per expiry when the VIC is dual-edge
+     * (as the AST2400 hardwires for timers 16-18). The faithful G3 VIC resets
+     * dual-edge to 0 and both the vendor firmware and our irq-aspeed-g3-vic driver
+     * program the timer as a single rising-edge source, so the toggle latched only
+     * every OTHER expiry -> HZ/2 -> the vendor watchdog daemon lost its race with
+     * the wall-clock WDT. Fixed in hw/timer/aspeed_timer.c (one rising-edge pulse
+     * per expiry on the AST2050). C4 now boots its BMC web service and our modern
+     * kernel (irq-aspeed-g3-vic) boots to SSH, both on the faithful G3 VIC. See
+     * qemu-model/results/vic-hardware-crosscheck.md §7.
      */
-    object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_2050_VIC);
+    } else {
+        object_initialize_child(obj, "vic", &a->vic, TYPE_ASPEED_VIC);
+    }
 
     /*
      * The AST2050 (G3) has a counter-style RTC (created in realize); AST2400/2500

@@ -131,6 +131,44 @@ static inline uint32_t calculate_match(struct AspeedTimer *t, int i)
     return t->match[i] < t->reload ? t->match[i] : 0;
 }
 
+/*
+ * Raise the per-timer interrupt for one expiry.
+ *
+ * The AST2400/2500/2600 model TOGGLES the line each expiry ("signalling with
+ * both the rising and falling edge", see AspeedTimer::level) and relies on the
+ * VIC/INTC being configured dual-edge for the timer sources -- which the AST2400
+ * VIC hardwires (both-edge = 0x00070000 for timers 16-18). One toggle then
+ * yields exactly one interrupt per expiry.
+ *
+ * The AST2050 (G3) VIC does NOT hardwire dual-edge: its sense/dual/event reset to
+ * 0 (datasheet §16, JTAG-confirmed) and the vendor firmware programs the timer as
+ * a *single* rising-edge source (sense=0/dual=0/event=1). Under the toggle model
+ * that single-edge config would latch only every OTHER expiry -> the guest clock
+ * runs at HZ/2 (measured: 41.8 vs 86.8 IRQ16/vsec), the vendor watchdog daemon's
+ * 5-guest-second sleep overshoots the 10 s WDT in wall time, and the C410X boot
+ * WDT-resets at ~17 s. Real AST2050 silicon delivers one rising edge per expiry
+ * with exactly this config (the vendor boots on hardware), so the faithful G3
+ * model emits a single rising-edge PULSE per expiry instead of a toggle.
+ */
+static void aspeed_timer_raise_irq(AspeedTimer *t)
+{
+    AspeedTimerCtrlState *s = timer_to_ctrl(t);
+
+    s->irq_sts |= BIT(t->id);
+
+    if (s->scu->silicon_rev == AST2050_A1_SILICON_REV) {
+        /* G3: one rising-edge pulse per expiry (VIC latches the edge in raw). */
+        t->level = 1;
+        qemu_set_irq(t->irq, 1);
+        t->level = 0;
+        qemu_set_irq(t->irq, 0);
+    } else {
+        /* AST2400+: toggle; VIC is dual-edge so each toggle = one interrupt. */
+        t->level = !t->level;
+        qemu_set_irq(t->irq, t->level);
+    }
+}
+
 static uint64_t calculate_next(struct AspeedTimer *t)
 {
     uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -161,10 +199,7 @@ static uint64_t calculate_next(struct AspeedTimer *t)
     timer_del(&t->timer);
 
     if (timer_overflow_interrupt(t)) {
-        AspeedTimerCtrlState *s = timer_to_ctrl(t);
-        t->level = !t->level;
-        s->irq_sts |= BIT(t->id);
-        qemu_set_irq(t->irq, t->level);
+        aspeed_timer_raise_irq(t);
     }
 
     next = MAX(calculate_match(t, 0), calculate_match(t, 1));
@@ -202,10 +237,7 @@ static void aspeed_timer_expire(void *opaque)
     }
 
     if (interrupt) {
-        AspeedTimerCtrlState *s = timer_to_ctrl(t);
-        t->level = !t->level;
-        s->irq_sts |= BIT(t->id);
-        qemu_set_irq(t->irq, t->level);
+        aspeed_timer_raise_irq(t);
     }
 
     aspeed_timer_mod(t);
