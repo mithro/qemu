@@ -683,12 +683,33 @@ static const TypeInfo aspeed_2400_scu_info = {
     .class_init = aspeed_2400_scu_class_init,
 };
 
+static void aspeed_2050_scu_reset(DeviceState *dev)
+{
+    AspeedSCUState *s = ASPEED_SCU(dev);
+
+    aspeed_scu_reset(dev);   /* AST2400 table + rev/strap/prot-key overrides */
+    /*
+     * AST2050 M-PLL / H-PLL reset value is 0x00004291 (datasheet §18 p.212, "post-
+     * divider /2 -> 133 MHz"), HARDWARE-CONFIRMED over JTAG on the real KGPE-D16
+     * (reset-halt read SCU20=SCU24=0x00004291; see qemu-model/results/
+     * soc-registers-hardware-crosscheck.md). We keep the rest of the AST2400 reset
+     * table (the datasheet-faithful G3 table zeroes UART_HPLL_CLK/SOC_SCRATCH1,
+     * which the AST2400 U-Boot + Dell vendor firmware need), and just present the
+     * silicon-faithful PLL params here. bit18(PROGRAMMED)=0 in 0x4291, so
+     * aspeed_2400_scu_calc_hpll falls back to the SCU70 strap for the actual clock
+     * rate -- unchanged; this only fixes what the guest *reads*.
+     */
+    s->regs[MPLL_PARAM] = 0x00004291;
+    s->regs[HPLL_PARAM] = 0x00004291;
+}
+
 static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     AspeedSCUClass *asc = ASPEED_SCU_CLASS(klass);
 
     dc->desc = "ASPEED 2050 (G3) System Control Unit";
+    device_class_set_legacy_reset(dc, aspeed_2050_scu_reset);
     /*
      * Reset values: keep the faithful rev-id (SCU7C=0x00000202, set from the
      * silicon_rev property in aspeed_scu_reset) but use the AST2400 reset TABLE
