@@ -220,7 +220,7 @@ static const uint32_t ast2400_a0_resets[ASPEED_SCU_NR_REGS] = {
  * the datasheet-documented G3 registers are seeded; PROT_KEY, HW_STRAP1 and
  * SILICON_REV are overwritten from properties in aspeed_scu_reset().
  */
-static const uint32_t ast2050_a3_resets[ASPEED_SCU_NR_REGS] = {
+static const uint32_t ast2050_a3_resets[ASPEED_SCU_NR_REGS] G_GNUC_UNUSED = {
      [SYS_RST_CTRL]    = 0x000FFE5CU, /* SCU04 p205                          */
      [CLK_SEL]         = 0xE3F00070U, /* SCU08 p207                          */
      [CLK_STOP_CTRL]   = 0x000C3E8BU, /* SCU0C p209                          */
@@ -689,7 +689,19 @@ static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
     AspeedSCUClass *asc = ASPEED_SCU_CLASS(klass);
 
     dc->desc = "ASPEED 2050 (G3) System Control Unit";
-    asc->resets = ast2050_a3_resets;
+    /*
+     * Reset values: keep the faithful rev-id (SCU7C=0x00000202, set from the
+     * silicon_rev property in aspeed_scu_reset) but use the AST2400 reset TABLE
+     * for the other registers. CI showed the datasheet-faithful G3 reset table
+     * (ast2050_a3_resets) breaks the legacy boots that are tuned for the AST2400
+     * machine: the OpenBMC *AST2400* U-Boot and the RE-patched Dell vendor
+     * firmware read AST2400 SCU values (UART_HPLL_CLK 0x160, SOC_SCRATCH1 DRAM-
+     * ready, etc.) that the G3 map zeroes -> the boot hangs. The modern-kernel
+     * direct boot works with the G3 table, but applying it needs a G3-aware
+     * U-Boot/firmware (co-evolution) -- tracked as a task. ast2050_a3_resets is
+     * kept below as the opt-in faithful table for that work.
+     */
+    asc->resets = ast2400_a0_resets;
     /*
      * Reuse the AST2400 clock helpers: the AST2050 shares the H-PLL/M-PLL
      * (2-OD)*(N+2)/(D+1) core formula, and at reset SCU24[18]=0 so the CPU clock
