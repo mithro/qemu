@@ -227,7 +227,15 @@ static void aspeed_ast2400_soc_init(Object *obj)
         object_initialize_child(obj, "spi[*]", &s->spi[i], typename);
     }
 
-    for (i = 0; i < sc->ehcis_num; i++) {
+    /*
+     * The AST2050 (G3) has NO EHCI USB host controller — it is an AST2400+
+     * block. Don't create it, so the faithful machine exposes no phantom EHCI
+     * at 0x1E6A1000/0x1E6A3000 (all USB is via the device/vhub at 0x1E6A0000).
+     * Gate _init and realize identically: an un-inited child that realize then
+     * tried to map would trip qdev's realized-properly assertion.
+     */
+    for (i = 0; i < sc->ehcis_num
+             && sc->silicon_rev != AST2050_A1_SILICON_REV; i++) {
         object_initialize_child(obj, "ehci[*]", &s->ehci[i],
                                 TYPE_PLATFORM_EHCI);
     }
@@ -470,8 +478,9 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                         ASPEED_SMC_GET_CLASS(&s->spi[i])->flash_window_base);
     }
 
-    /* EHCI */
-    for (i = 0; i < sc->ehcis_num; i++) {
+    /* EHCI — absent on the AST2050 (G3); gated to match _init (no phantom). */
+    for (i = 0; i < sc->ehcis_num
+             && sc->silicon_rev != AST2050_A1_SILICON_REV; i++) {
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->ehci[i]), errp)) {
             return;
         }
