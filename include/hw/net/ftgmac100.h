@@ -72,6 +72,21 @@ struct FTGMAC100State {
     uint32_t txdes0_edotr;
     uint32_t rxdes0_edorr;
     bool dma64;
+
+    /*
+     * AST2050 (G3) faithfulness: the G3 RMII RX datapath is not active out of
+     * reset. On real silicon the OS driver must (re)establish the RMII RX
+     * clock/datapath after the bootloader handoff by resetting+reconfiguring
+     * the RMII PHY; until then the MAC RX engine pulls zero frames off the
+     * wire even with RXDMA_EN|RXMAC_EN set and a valid RX ring. The mainline
+     * ftgmac100 driver never does this for the G3 (it only warns "Unsupported
+     * PHY mode rmii" and assumes firmware configured it), which is why eth0 RX
+     * is dead on the real AST2050. Modelled here as a gate: RX is delivered
+     * only after the guest issues a PHY BMCR reset. Scoped to the G3 via the
+     * "aspeed-g3" property so AST2400/2500/2600 behaviour is unchanged.
+     */
+    bool aspeed_g3;
+    bool rmii_rx_ready;
 };
 
 #define TYPE_ASPEED_MII "aspeed-mmi"

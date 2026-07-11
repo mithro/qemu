@@ -395,6 +395,16 @@ static void do_phy_write(FTGMAC100State *s, uint8_t reg, uint16_t val)
     switch (reg) {
     case MII_BMCR:     /* Basic Control */
         if (val & MII_BMCR_RESET) {
+            /*
+             * AST2050 (G3): resetting+reconfiguring the RMII PHY is what
+             * (re)establishes the RMII RX datapath on real silicon. Model that
+             * by opening the RX gate here. The mainline ftgmac100 driver never
+             * resets the PHY for the G3 (so RX stays dead); the legacy/vendor
+             * firmware and the fixed driver do, so their RX works.
+             */
+            if (s->aspeed_g3) {
+                s->rmii_rx_ready = true;
+            }
             phy_reset(s);
         } else {
             s->phy_control = val & MII_BMCR_MASK;
@@ -659,6 +669,20 @@ static bool ftgmac100_can_receive(NetClientState *nc)
         return false;
     }
 
+    /*
+     * AST2050 (G3) faithfulness gate. On the real silicon the MAC RX engine
+     * pulls no frames off the RMII interface until the OS driver has
+     * (re)established the RMII RX datapath by resetting+reconfiguring the PHY
+     * (see the comment on FTGMAC100State::aspeed_g3). RXDMA_EN|RXMAC_EN and a
+     * valid ring are NOT sufficient. The mainline ftgmac100 driver omits this
+     * step for the G3, so its RX stays dead here too -- reproducing the
+     * hardware bug. A driver that resets the PHY (the legacy/vendor firmware,
+     * and the fixed mainline driver) opens the gate.
+     */
+    if (s->aspeed_g3 && !s->rmii_rx_ready) {
+        return false;
+    }
+
     if (ftgmac100_read_bd(&bd, s->rx_descriptor)) {
         return false;
     }
@@ -726,6 +750,20 @@ static void ftgmac100_do_reset(FTGMAC100State *s, bool sw_reset)
     s->phycr = 0;
     s->phydata = 0;
     s->fcr = 0x400;
+
+    /*
+     * AST2050 (G3): the RMII RX datapath state lives on the PHY side, so it is
+     * cleared only by a power-on/hard reset -- NOT by a MACCR SW_RST, which
+     * resets the MAC block but leaves the PHY (and thus the established RMII RX
+     * clock/datapath) untouched. Out of a hard reset the datapath is not yet
+     * established: the OS driver must reset+reconfigure the RMII PHY to bring it
+     * up (see FTGMAC100State::aspeed_g3). Modelling the MAC SW_RST as
+     * non-destructive here is what lets the fixed driver's one-time PHY reset
+     * survive the SW_RSTs that ftgmac100 issues on every link change.
+     */
+    if (s->aspeed_g3 && !sw_reset) {
+        s->rmii_rx_ready = false;
+    }
 
     /* and the PHY */
     phy_reset(s);
@@ -1055,6 +1093,18 @@ static ssize_t ftgmac100_receive(NetClientState *nc, const uint8_t *buf,
         return -1;
     }
 
+    /*
+     * AST2050 (G3) faithfulness gate (see ftgmac100_can_receive and the comment
+     * on FTGMAC100State::aspeed_g3). The RMII RX datapath is not established
+     * until the OS driver resets+reconfigures the PHY, so the MAC RX engine
+     * delivers nothing here either. can_receive() alone is only a flow-control
+     * hint (a queued frame can still be delivered), so the drop must also be
+     * enforced on the delivery path.
+     */
+    if (s->aspeed_g3 && !s->rmii_rx_ready) {
+        return -1;
+    }
+
     if (!ftgmac100_filter(s, buf, size)) {
         return size;
     }
@@ -1231,7 +1281,7 @@ static void ftgmac100_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_ftgmac100 = {
     .name = TYPE_FTGMAC100,
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(irq_state, FTGMAC100State),
@@ -1261,12 +1311,14 @@ static const VMStateDescription vmstate_ftgmac100 = {
         VMSTATE_UINT64(tx_ring, FTGMAC100State),
         VMSTATE_UINT64(rx_descriptor, FTGMAC100State),
         VMSTATE_UINT64(tx_descriptor, FTGMAC100State),
+        VMSTATE_BOOL_V(rmii_rx_ready, FTGMAC100State, 3),
         VMSTATE_END_OF_LIST()
     }
 };
 
 static const Property ftgmac100_properties[] = {
     DEFINE_PROP_BOOL("aspeed", FTGMAC100State, aspeed, false),
+    DEFINE_PROP_BOOL("aspeed-g3", FTGMAC100State, aspeed_g3, false),
     DEFINE_NIC_PROPERTIES(FTGMAC100State, conf),
     DEFINE_PROP_BOOL("dma64", FTGMAC100State, dma64, false),
 };
