@@ -8,6 +8,11 @@ config TMP421
     depends on I2C
     default y if I2C_DEVICES
 
+config W83795
+    bool
+    depends on I2C
+    default y if I2C_DEVICES
+
 config DPS310
     bool
     depends on I2C
