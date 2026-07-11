@@ -1,5 +1,6 @@
 system_ss.add(when: 'CONFIG_TMP105', if_true: files('tmp105.c'))
 system_ss.add(when: 'CONFIG_TMP421', if_true: files('tmp421.c'))
+system_ss.add(when: 'CONFIG_W83795', if_true: files('w83795.c'))
 system_ss.add(when: 'CONFIG_DPS310', if_true: files('dps310.c'))
 system_ss.add(when: 'CONFIG_EMC141X', if_true: files('emc141x.c'))
 system_ss.add(when: 'CONFIG_ADM1266', if_true: files('adm1266.c'))

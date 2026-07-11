@@ -542,6 +542,16 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
     static const uint8_t mac[6] = { 0x00, 0xe0, 0x81, 0x12, 0x34, 0x56 };
     memcpy(eeprom_buf, mac, sizeof(mac));
     smbus_eeprom_init_one(aspeed_i2c_get_bus(&soc->i2c, 0), 0x50, eeprom_buf);
+
+    /*
+     * Nuvoton/Winbond W83795G hardware monitor on BMC I2C bus 1 at 0x2f -- the
+     * KGPE-D16's single fan/voltage/temperature sensor chip. Raptor's AST2050
+     * OpenBMC port taps it here (i2c-1/0x2f), and coreboot's devicetree.cb
+     * programs its channel map. See
+     * asus-kgpe-d16-firmware/openbmc/bmc-functionality/HW-WIRING-power-sensors.md.
+     * The AST2050's own PWM/tach block is unused on this board.
+     */
+    i2c_slave_create_simple(aspeed_i2c_get_bus(&soc->i2c, 1), "w83795", 0x2f);
 }
 
 static void quanta_q71l_bmc_i2c_init(AspeedMachineState *bmc)
