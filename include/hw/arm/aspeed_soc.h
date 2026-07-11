@@ -121,6 +121,7 @@ struct Aspeed2400SoCState {
     AspeedSMCAST2050State smc_g3;     /* AST2050 (G3) legacy SMC @0x16000000 */
     AspeedLPCAST2050State lpc_g3;     /* AST2050 (G3) LPC (KCS/BT/iLPC2AHB) */
     AspeedUDCAST2050State udc_g3;     /* AST2050 (G3) USB device/vhub @0x1E6A0000 */
+    SerialMM vuart;                   /* AST2050 (G3) host VUART @0x1E787000 (SOL) */
 };
 
 #define TYPE_ASPEED2400_SOC "aspeed2400-soc"
@@ -178,6 +179,12 @@ struct AspeedSoCClass {
     int macs_num;
     int uarts_num;
     int uarts_base;
+    /*
+     * AST2050 (G3) models the host-facing VUART (0x1E787000) used for
+     * Serial-over-LAN; when set, the SoC instantiates it and the machine wires
+     * serial_hd(1) to it.  The AST2400/2500 leave it off (unmodelled as before).
+     */
+    bool has_vuart;
     const int *irqmap;
     const hwaddr *memmap;
     uint32_t num_cpus;

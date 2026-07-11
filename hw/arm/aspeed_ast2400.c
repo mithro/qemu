@@ -271,6 +271,17 @@ static void aspeed_ast2400_soc_init(Object *obj)
         object_initialize_child(obj, "uart[*]", &s->uart[i], TYPE_SERIAL_MM);
     }
 
+    /*
+     * AST2050 (G3) host-facing VUART (0x1E787000): a virtual 16550 the host
+     * reaches over LPC (I/O 0x3F8, datasheet §29) and the BMC bridges to
+     * Serial-over-LAN.  Modeled as a plain SerialMM 16550 (the LPC-side
+     * address/SIRQ control registers at offset 0x20+ are not decoded — there is
+     * no LPC host peer in this machine, so the BMC-side 16550 is what matters).
+     */
+    if (sc->has_vuart) {
+        object_initialize_child(obj, "vuart", &a->vuart, TYPE_SERIAL_MM);
+    }
+
     snprintf(typename, sizeof(typename), TYPE_ASPEED_XDMA "-%s", socname);
     object_initialize_child(obj, "xdma", &s->xdma, typename);
 
@@ -482,6 +493,25 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     /* UART */
     if (!aspeed_soc_uart_realize(s, errp)) {
         return;
+    }
+
+    /* VUART (AST2050/G3) — host Serial-over-LAN bridge; see the soc_init note. */
+    if (sc->has_vuart) {
+        SerialMM *smm = &a->vuart;
+
+        qdev_prop_set_uint8(DEVICE(smm), "regshift", 2);
+        qdev_prop_set_uint32(DEVICE(smm), "baudbase", 38400);
+        qdev_set_legacy_instance_id(DEVICE(smm),
+                                    sc->memmap[ASPEED_DEV_VUART], 2);
+        qdev_prop_set_uint8(DEVICE(smm), "endianness", DEVICE_LITTLE_ENDIAN);
+        /* Chardev set by the machine (serial_hd(1)). */
+        if (!sysbus_realize(SYS_BUS_DEVICE(smm), errp)) {
+            return;
+        }
+        sysbus_connect_irq(SYS_BUS_DEVICE(smm), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_VUART));
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(smm), 0,
+                        sc->memmap[ASPEED_DEV_VUART]);
     }
 
     /* I2C */
@@ -768,6 +798,7 @@ static void aspeed_soc_ast2050_class_init(ObjectClass *oc, void *data)
     sc->macs_num     = 2;
     sc->uarts_num    = 5;
     sc->uarts_base   = ASPEED_DEV_UART1;
+    sc->has_vuart    = true;         /* host VUART @0x1E787000 for SOL (G3) */
     sc->irqmap       = aspeed_soc_ast2400_irqmap;
     sc->memmap       = aspeed_soc_ast2400_memmap;
     sc->num_cpus     = 1;

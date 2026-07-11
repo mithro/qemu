@@ -382,13 +382,28 @@ static void connect_serial_hds_to_uarts(AspeedMachineState *bmc)
     AspeedSoCState *s = bmc->soc;
     AspeedSoCClass *sc = ASPEED_SOC_GET_CLASS(s);
     int uart_chosen = bmc->uart_chosen ? bmc->uart_chosen : amc->uart_default;
+    int serial_index = 1;
 
     aspeed_soc_uart_set_chr(s, uart_chosen, serial_hd(0));
-    for (int i = 1, uart = sc->uarts_base; i < sc->uarts_num; uart++) {
+
+    /*
+     * AST2050 (G3): the SoC models the host-facing VUART (0x1E787000) used for
+     * Serial-over-LAN.  Reserve serial_hd(1) for it (so obmc-console-server can
+     * bridge host output to IPMI SOL); the physical UARTs then start at
+     * serial_hd(2).  Other SoCs leave has_vuart clear and are unaffected.
+     */
+    if (sc->has_vuart) {
+        Aspeed2400SoCState *a = ASPEED2400_SOC(s);
+
+        qdev_prop_set_chr(DEVICE(&a->vuart), "chardev", serial_hd(1));
+        serial_index = 2;
+    }
+
+    for (int uart = sc->uarts_base; serial_index < sc->uarts_num; uart++) {
         if (uart == uart_chosen) {
             continue;
         }
-        aspeed_soc_uart_set_chr(s, uart, serial_hd(i++));
+        aspeed_soc_uart_set_chr(s, uart, serial_hd(serial_index++));
     }
 }
 
