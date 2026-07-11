@@ -14,9 +14,25 @@
 #include "qapi/error.h"
 #include "qapi/visitor.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 #include "hw/registerfields.h"
+
+/*
+ * ASUS KGPE-D16 (AST2050) power lines expressed in the Aspeed GPIO (set, bit)
+ * space. A set holds 4 groups of 8: set 0 = A,B,C,D; set 1 = E,F,G,H. So a
+ * GPIO<port><n> maps to (set, group*8 + n). All request lines are active-low.
+ * Source: HW-WIRING-power-sensors.md §1.1 (Raptor's board CSV).
+ */
+#define KGPE_D16_B1_SET 0   /* GPIOB1 CTL_REQ_POWERUP_N   (power-on request) */
+#define KGPE_D16_B1_BIT 9
+#define KGPE_D16_F0_SET 1   /* GPIOF0 CTL_REQ_POWERDOWN_N (force-off request) */
+#define KGPE_D16_F0_BIT 8
+#define KGPE_D16_B6_SET 0   /* GPIOB6 CTL_REQ_RESET_N     (warm-reset request) */
+#define KGPE_D16_B6_BIT 14
+#define KGPE_D16_H2_SET 1   /* GPIOH2 STA_LINE_POWER      (power-state input) */
+#define KGPE_D16_H2_BIT 26
 
 #define GPIOS_PER_GROUP 8
 
@@ -299,6 +315,8 @@ static ptrdiff_t aspeed_gpio_set_idx(AspeedGPIOState *s, GPIOSets *regs)
     return nested_struct_index(AspeedGPIOState, s, sets, GPIOSets, regs);
 }
 
+static void aspeed_gpio_kgpe_d16_pwrseq(AspeedGPIOState *s);
+
 static void aspeed_gpio_update(AspeedGPIOState *s, GPIOSets *regs,
                                uint32_t value, uint32_t mode_mask)
 {
@@ -347,6 +365,10 @@ static void aspeed_gpio_update(AspeedGPIOState *s, GPIOSets *regs,
         }
     }
     qemu_set_irq(s->irq, !!(s->pending));
+
+    if (s->kgpe_d16_pwrseq) {
+        aspeed_gpio_kgpe_d16_pwrseq(s);
+    }
 }
 
 static bool aspeed_gpio_get_pin_level(AspeedGPIOState *s, uint32_t set_idx,
@@ -374,6 +396,63 @@ static void aspeed_gpio_set_pin_level(AspeedGPIOState *s, uint32_t set_idx,
 
     aspeed_gpio_update(s, &s->sets[set_idx], value,
                        ~s->sets[set_idx].direction);
+}
+
+/* True iff (set, bit) is currently driven as an output at logic low. */
+static bool aspeed_gpio_out_low(AspeedGPIOState *s, int set, int bit)
+{
+    uint32_t mask = 1U << bit;
+    return (s->sets[set].direction & mask) && !(s->sets[set].data_value & mask);
+}
+
+/*
+ * ASUS KGPE-D16 (AST2050) board power sequencer.
+ *
+ * On the real board the BMC does not drive the ATX PSU directly; it drives
+ * three active-low *request* lines into the board's power-sequencing glue and
+ * senses the resulting mainboard rail on a fourth line:
+ *
+ *   GPIOB1 CTL_REQ_POWERUP_N   pulse low -> engage host power
+ *   GPIOF0 CTL_REQ_POWERDOWN_N pulse low -> force host power off
+ *   GPIOB6 CTL_REQ_RESET_N     pulse low -> warm reset (power stays on)
+ *   GPIOH2 STA_LINE_POWER      input, 1 = powered on, 0 = off
+ *
+ * (Sequences per asus_power.sh; see HW-WIRING-power-sensors.md §1.2.) This is a
+ * minimal faithful latch of that glue so the full OpenBMC power path
+ * (Redfish -> phosphor-state-manager -> GPIO -> power-state) is observable in
+ * emulation. It is a set/reset latch: a POWERUP_N assertion sets it, a
+ * POWERDOWN_N assertion clears it (force-off wins), and a RESET_N pulse leaves
+ * the power state unchanged. Because each request line is only momentarily
+ * pulsed, the latch — not the instantaneous pin level — holds the host state.
+ *
+ * Gated by the kgpe-d16-pwrseq qdev property, which only the kgpe-d16-bmc
+ * machine sets; every other Aspeed board leaves it off and is unaffected.
+ */
+static void aspeed_gpio_kgpe_d16_pwrseq(AspeedGPIOState *s)
+{
+    bool force_off, power_up, new_on;
+
+    /* Driving GPIOH2 re-enters aspeed_gpio_update(); do not recurse. */
+    if (s->kgpe_d16_pwrseq_busy) {
+        return;
+    }
+
+    force_off = aspeed_gpio_out_low(s, KGPE_D16_F0_SET, KGPE_D16_F0_BIT);
+    power_up  = aspeed_gpio_out_low(s, KGPE_D16_B1_SET, KGPE_D16_B1_BIT);
+    /* GPIOB6 reset-req-n is a warm reset: it never changes the power latch. */
+
+    new_on = s->kgpe_d16_host_on;
+    if (force_off) {
+        new_on = false;
+    } else if (power_up) {
+        new_on = true;
+    }
+    s->kgpe_d16_host_on = new_on;
+
+    /* Reflect the latch on the GPIOH2 power-state input the BMC reads. */
+    s->kgpe_d16_pwrseq_busy = true;
+    aspeed_gpio_set_pin_level(s, KGPE_D16_H2_SET, KGPE_D16_H2_BIT, new_on);
+    s->kgpe_d16_pwrseq_busy = false;
 }
 
 /*
@@ -1478,6 +1557,15 @@ static const VMStateDescription vmstate_aspeed_gpio = {
    }
 };
 
+static const Property aspeed_gpio_properties[] = {
+    /*
+     * ASUS KGPE-D16 (AST2050) host power-sequencer glue. Off by default so
+     * every other Aspeed machine is byte-for-byte unchanged; the kgpe-d16-bmc
+     * machine turns it on. See aspeed_gpio_kgpe_d16_pwrseq().
+     */
+    DEFINE_PROP_BOOL("kgpe-d16-pwrseq", AspeedGPIOState, kgpe_d16_pwrseq, false),
+};
+
 static void aspeed_gpio_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -1486,6 +1574,7 @@ static void aspeed_gpio_class_init(ObjectClass *klass, void *data)
     device_class_set_legacy_reset(dc, aspeed_gpio_reset);
     dc->desc = "Aspeed GPIO Controller";
     dc->vmsd = &vmstate_aspeed_gpio;
+    device_class_set_props(dc, aspeed_gpio_properties);
 }
 
 static void aspeed_gpio_ast2400_class_init(ObjectClass *klass, void *data)

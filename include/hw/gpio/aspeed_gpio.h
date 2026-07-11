@@ -90,6 +90,20 @@ struct AspeedGPIOState {
     qemu_irq irq;
     qemu_irq gpios[ASPEED_GPIO_MAX_NR_SETS][ASPEED_GPIOS_PER_SET];
 
+    /*
+     * ASUS KGPE-D16 (AST2050) board power-sequencer glue. Off by default; the
+     * kgpe-d16-bmc machine enables it (qdev property "kgpe-d16-pwrseq") so the
+     * OpenBMC host-power path is observable/testable in emulation. The BMC's
+     * three active-low request lines (GPIOB1 power-up, GPIOF0 power-down,
+     * GPIOB6 reset) drive a modeled host-power latch that feeds back on the
+     * GPIOH2 power-state input. See hw/gpio/aspeed_gpio.c and
+     * asus-kgpe-d16-firmware/openbmc/bmc-functionality/HW-WIRING-power-sensors.md.
+     * Every other Aspeed machine leaves kgpe_d16_pwrseq false and is unaffected.
+     */
+    bool kgpe_d16_pwrseq;       /* qdev property: enable the board glue */
+    bool kgpe_d16_host_on;      /* modeled host-power latch (GPIOH2 reflects it) */
+    bool kgpe_d16_pwrseq_busy;  /* re-entrancy guard while driving GPIOH2 */
+
     /* Parallel GPIO Registers */
     uint32_t debounce_regs[ASPEED_GPIO_NR_DEBOUNCE_REGS];
     struct GPIOSets {
