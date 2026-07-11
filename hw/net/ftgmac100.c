@@ -395,16 +395,6 @@ static void do_phy_write(FTGMAC100State *s, uint8_t reg, uint16_t val)
     switch (reg) {
     case MII_BMCR:     /* Basic Control */
         if (val & MII_BMCR_RESET) {
-            /*
-             * AST2050 (G3): resetting+reconfiguring the RMII PHY is what
-             * (re)establishes the RMII RX datapath on real silicon. Model that
-             * by opening the RX gate here. The mainline ftgmac100 driver never
-             * resets the PHY for the G3 (so RX stays dead); the legacy/vendor
-             * firmware and the fixed driver do, so their RX works.
-             */
-            if (s->aspeed_g3) {
-                s->rmii_rx_ready = true;
-            }
             phy_reset(s);
         } else {
             s->phy_control = val & MII_BMCR_MASK;
@@ -670,16 +660,18 @@ static bool ftgmac100_can_receive(NetClientState *nc)
     }
 
     /*
-     * AST2050 (G3) faithfulness gate. On the real silicon the MAC RX engine
-     * pulls no frames off the RMII interface until the OS driver has
-     * (re)established the RMII RX datapath by resetting+reconfiguring the PHY
-     * (see the comment on FTGMAC100State::aspeed_g3). RXDMA_EN|RXMAC_EN and a
-     * valid ring are NOT sufficient. The mainline ftgmac100 driver omits this
-     * step for the G3, so its RX stays dead here too -- reproducing the
-     * hardware bug. A driver that resets the PHY (the legacy/vendor firmware,
-     * and the fixed mainline driver) opens the gate.
+     * AST2050 (G3) faithfulness gate: the board link is 100 Mbps RMII, so the
+     * MAC RX engine only samples the wire correctly when the MAC speed mode
+     * matches -- FAST_MODE (100M) set and GIGA_MODE (1000M) clear. If it does
+     * not (e.g. the MAC left in 10M timing after a SW_RST cleared the speed
+     * bit), every received frame is mangled into a CRC / frame-too-long error
+     * and dropped, i.e. rx=0. This is the real AST2050 eth0 RX=0 mechanism
+     * (HW-verified: MACCR bit19 FAST_MODE clear; setting it restored RX).
+     * See the comment on FTGMAC100State::aspeed_g3.
      */
-    if (s->aspeed_g3 && !s->rmii_rx_ready) {
+    if (s->aspeed_g3 &&
+        (!(s->maccr & FTGMAC100_MACCR_FAST_MODE) ||
+          (s->maccr & FTGMAC100_MACCR_GIGA_MODE))) {
         return false;
     }
 
@@ -741,29 +733,23 @@ static void ftgmac100_do_reset(FTGMAC100State *s, bool sw_reset)
     s->fear1 = 0;
     s->tpafcr = 0xf1;
 
-    if (sw_reset) {
+    if (sw_reset && !s->aspeed_g3) {
+        /* AST2400/2500: a MAC SW_RST preserves the speed mode bits. */
         s->maccr &= FTGMAC100_MACCR_GIGA_MODE | FTGMAC100_MACCR_FAST_MODE;
     } else {
+        /*
+         * Power-on, or an AST2050 (G3) MAC SW_RST: MACCR is fully cleared. On
+         * the G3 the speed mode bit does NOT survive a SW_RST (HW-verified),
+         * unlike the AST2400/2500. This is what makes the mainline driver's
+         * preserve-only ftgmac100_start_hw() leave the G3 MAC in 10M timing on
+         * a 100M link -> the RX speed-mismatch drop above -> rx=0.
+         */
         s->maccr = 0;
     }
 
     s->phycr = 0;
     s->phydata = 0;
     s->fcr = 0x400;
-
-    /*
-     * AST2050 (G3): the RMII RX datapath state lives on the PHY side, so it is
-     * cleared only by a power-on/hard reset -- NOT by a MACCR SW_RST, which
-     * resets the MAC block but leaves the PHY (and thus the established RMII RX
-     * clock/datapath) untouched. Out of a hard reset the datapath is not yet
-     * established: the OS driver must reset+reconfigure the RMII PHY to bring it
-     * up (see FTGMAC100State::aspeed_g3). Modelling the MAC SW_RST as
-     * non-destructive here is what lets the fixed driver's one-time PHY reset
-     * survive the SW_RSTs that ftgmac100 issues on every link change.
-     */
-    if (s->aspeed_g3 && !sw_reset) {
-        s->rmii_rx_ready = false;
-    }
 
     /* and the PHY */
     phy_reset(s);
@@ -1094,14 +1080,14 @@ static ssize_t ftgmac100_receive(NetClientState *nc, const uint8_t *buf,
     }
 
     /*
-     * AST2050 (G3) faithfulness gate (see ftgmac100_can_receive and the comment
-     * on FTGMAC100State::aspeed_g3). The RMII RX datapath is not established
-     * until the OS driver resets+reconfigures the PHY, so the MAC RX engine
-     * delivers nothing here either. can_receive() alone is only a flow-control
-     * hint (a queued frame can still be delivered), so the drop must also be
-     * enforced on the delivery path.
+     * AST2050 (G3) speed-mismatch drop (see ftgmac100_can_receive and the
+     * comment on FTGMAC100State::aspeed_g3). can_receive() alone is only a
+     * flow-control hint (a queued frame can still be delivered), so the drop
+     * for a MAC/link speed-mode mismatch must also sit on the delivery path.
      */
-    if (s->aspeed_g3 && !s->rmii_rx_ready) {
+    if (s->aspeed_g3 &&
+        (!(s->maccr & FTGMAC100_MACCR_FAST_MODE) ||
+          (s->maccr & FTGMAC100_MACCR_GIGA_MODE))) {
         return -1;
     }
 
@@ -1281,7 +1267,7 @@ static void ftgmac100_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_ftgmac100 = {
     .name = TYPE_FTGMAC100,
-    .version_id = 3,
+    .version_id = 2,
     .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(irq_state, FTGMAC100State),
@@ -1311,7 +1297,6 @@ static const VMStateDescription vmstate_ftgmac100 = {
         VMSTATE_UINT64(tx_ring, FTGMAC100State),
         VMSTATE_UINT64(rx_descriptor, FTGMAC100State),
         VMSTATE_UINT64(tx_descriptor, FTGMAC100State),
-        VMSTATE_BOOL_V(rmii_rx_ready, FTGMAC100State, 3),
         VMSTATE_END_OF_LIST()
     }
 };

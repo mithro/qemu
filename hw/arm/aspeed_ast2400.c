@@ -574,11 +574,13 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         object_property_set_bool(OBJECT(&s->ftgmac100[i]), "aspeed", true,
                                  &error_abort);
         /*
-         * AST2050 (G3): mark the MAC so its model applies the faithful RMII
-         * RX-datapath gate (the RX engine delivers nothing until the OS driver
-         * resets+reconfigures the RMII PHY). This reproduces the real-silicon
-         * eth0 RX=0 seen with the mainline ftgmac100 driver, which never does
-         * that PHY reset for the G3. AST2400/2500/2600 keep the default (off).
+         * AST2050 (G3): mark the MAC so its model applies the faithful G3
+         * speed-mode behaviour (a MAC SW_RST clears the MACCR speed bit, and RX
+         * frames are dropped when the MAC speed mode disagrees with the 100M
+         * RMII link). This reproduces the real-silicon eth0 RX=0 seen with the
+         * mainline ftgmac100 driver, whose preserve-only start_hw() leaves the
+         * G3 MAC in 10M timing after the SW_RST. AST2400/2500/2600 keep the
+         * default (off) -- their SW_RST preserves the speed bit.
          */
         if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
             object_property_set_bool(OBJECT(&s->ftgmac100[i]), "aspeed-g3",

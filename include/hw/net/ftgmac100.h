@@ -74,19 +74,28 @@ struct FTGMAC100State {
     bool dma64;
 
     /*
-     * AST2050 (G3) faithfulness: the G3 RMII RX datapath is not active out of
-     * reset. On real silicon the OS driver must (re)establish the RMII RX
-     * clock/datapath after the bootloader handoff by resetting+reconfiguring
-     * the RMII PHY; until then the MAC RX engine pulls zero frames off the
-     * wire even with RXDMA_EN|RXMAC_EN set and a valid RX ring. The mainline
-     * ftgmac100 driver never does this for the G3 (it only warns "Unsupported
-     * PHY mode rmii" and assumes firmware configured it), which is why eth0 RX
-     * is dead on the real AST2050. Modelled here as a gate: RX is delivered
-     * only after the guest issues a PHY BMCR reset. Scoped to the G3 via the
-     * "aspeed-g3" property so AST2400/2500/2600 behaviour is unchanged.
+     * AST2050 (G3) faithfulness (HW-verified on the real AST2050). Two G3
+     * quirks, scoped by the "aspeed-g3" property so AST2400/2500/2600 are
+     * unchanged:
+     *
+     *  1. A MAC SW_RST (MACCR bit31) CLEARS MACCR on the G3 -- the speed mode
+     *     bit (FAST_MODE) included -- unlike the AST2400/2500 where it
+     *     survives. See ftgmac100_do_reset().
+     *
+     *  2. The board link is 100 Mbps RMII, so the MAC RX engine only receives
+     *     correctly when the MAC speed mode matches: FAST_MODE (100M) set and
+     *     GIGA_MODE (1000M) clear. If it does not (e.g. the MAC left in 10M
+     *     timing on a 100M link), every frame is over-sampled into a CRC /
+     *     frame-too-long error and dropped -> rx=0. See ftgmac100_can_receive()
+     *     and ftgmac100_receive().
+     *
+     * Together these reproduce the real bug: the mainline ftgmac100 driver's
+     * ftgmac100_start_hw() only PRESERVES the speed bits from MACCR, but on the
+     * G3 they were just cleared by the SW_RST in reset_and_config_mac(), so the
+     * MAC runs 10M timing on the 100M link and RX is dead. The cur_speed fix
+     * re-derives FAST_MODE and RX works.
      */
     bool aspeed_g3;
-    bool rmii_rx_ready;
 };
 
 #define TYPE_ASPEED_MII "aspeed-mmi"
