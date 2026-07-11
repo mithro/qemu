@@ -605,6 +605,18 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                        aspeed_soc_get_irq(s, ASPEED_DEV_XDMA));
 
     /* GPIO */
+    /*
+     * AST2050 (G3) only: enable the ASUS KGPE-D16 board power-sequencer glue in
+     * the GPIO model so the OpenBMC host-power path (Redfish -> state-manager ->
+     * GPIO request lines -> power-state input) is observable in emulation. The
+     * property is off for every other Aspeed SoC/machine, so this is a no-op for
+     * the AST2400/2500/2600 boards. See hw/gpio/aspeed_gpio.c
+     * aspeed_gpio_kgpe_d16_pwrseq(). Set before realize (qdev property).
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_property_set_bool(OBJECT(&s->gpio), "kgpe-d16-pwrseq", true,
+                                 &error_abort);
+    }
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio), errp)) {
         return;
     }
