@@ -255,8 +255,20 @@ static void aspeed_ast2400_soc_init(Object *obj)
                                 TYPE_PLATFORM_EHCI);
     }
 
-    snprintf(typename, sizeof(typename), "aspeed.sdmc-%s", socname);
-    object_initialize_child(obj, "sdmc", &s->sdmc, typename);
+    /*
+     * The AST2050 (G3) memory controller is DDR2, not the AST2400 DDR3. Its MCR04
+     * config resets to 0 (firmware writes the geometry; no SPD/strap/probe sizing),
+     * stores writes verbatim, and exposes the AST2000-compat MCR100 shadow (reads
+     * 0xA8). The real KGPE-D16 MCR04=0x00000585 (4-bank/64 MB) was captured over
+     * JTAG. See qemu-model/peripherals/sdram/DATASHEET-SDRAM.md (datasheet §17).
+     * Gate on the G3 silicon rev; AST2400/2500 keep the DDR3 aspeed_sdmc.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "sdmc", &s->sdmc, TYPE_ASPEED_2050_SDMC);
+    } else {
+        snprintf(typename, sizeof(typename), "aspeed.sdmc-%s", socname);
+        object_initialize_child(obj, "sdmc", &s->sdmc, typename);
+    }
     object_property_add_alias(obj, "ram-size", OBJECT(&s->sdmc),
                               "ram-size");
 
