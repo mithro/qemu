@@ -40,6 +40,18 @@ struct AspeedSCUState {
     uint32_t hw_strap1;
     uint32_t hw_strap2;
     uint32_t hw_prot_key;
+
+    /*
+     * AST2050 (G3) only: clock-stop / reset-hold side-effect lines, driven
+     * from SCU0C (Clock Stop Control) and SCU04 (System Reset Control) so the
+     * SoC can make the affected register files inert — the real chip's
+     * behaviour (datasheet §18 p205-210; HW finding #94: gating SCU0C[15]
+     * kills the live serial console on real silicon). Level 1 = clock
+     * stopped / held in reset. See qemu-model/peripherals/scu/DATASHEET-SCU.md.
+     */
+    qemu_irq g3_uartclk_stop;   /* SCU0C[15]: UART1+UART2 (one shared gate) */
+    qemu_irq g3_lclk_stop;      /* SCU0C[8]:  LPC controller clock          */
+    qemu_irq g3_i2c_rst;        /* SCU04[2]:  I2C/SMBus controller reset    */
 };
 
 #define AST2400_A0_SILICON_REV   0x02000303U

@@ -19,6 +19,7 @@
 #include "qemu/module.h"
 #include "qemu/error-report.h"
 #include "hw/i2c/aspeed_i2c.h"
+#include "hw/irq.h"
 #include "net/net.h"
 #include "system/system.h"
 #include "target/arm/cpu-qom.h"
@@ -324,6 +325,47 @@ static void aspeed_ast2400_soc_init(Object *obj)
     if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
         object_initialize_child(obj, "video", &s->video, TYPE_UNIMPLEMENTED_DEVICE);
     }
+}
+
+/*
+ * AST2050 (G3) SCU clock-stop / reset-hold side effects — see the wiring
+ * comment at the end of realize. Level 1 = clock stopped / held in reset.
+ */
+static void aspeed_2050_uartclk_stop(void *opaque, int n, int level)
+{
+    AspeedSoCState *s = ASPEED_SOC(opaque);
+
+    /* SCU0C[15]: ONE gate for both G3 UARTs (UART1 + the 0x1E784000 console) */
+    memory_region_set_enabled(
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->uart[0]), 0), !level);
+    memory_region_set_enabled(
+        sysbus_mmio_get_region(
+            SYS_BUS_DEVICE(&s->uart[ASPEED_DEV_UART5 - ASPEED_DEV_UART1]), 0),
+        !level);
+}
+
+static void aspeed_2050_lclk_stop(void *opaque, int n, int level)
+{
+    Aspeed2400SoCState *a = ASPEED2400_SOC(opaque);
+
+    /* SCU0C[8]: LPC controller clock (G3 LPC model incl. KCS channels) */
+    memory_region_set_enabled(
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(&a->lpc_g3), 0), !level);
+}
+
+static void aspeed_2050_i2c_rst(void *opaque, int n, int level)
+{
+    AspeedSoCState *s = ASPEED_SOC(opaque);
+
+    /*
+     * SCU04[2]: I2C/SMBus controller reset hold (all 7 engines). While held,
+     * the register file is inert; internal controller state is not modelled
+     * across an assert/deassert cycle (the device model's own reset covers
+     * the cold-boot path, which is the case both Linux and the vendor
+     * firmware exercise: de-assert once at init, before programming).
+     */
+    memory_region_set_enabled(
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->i2c), 0), !level);
 }
 
 static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
@@ -751,6 +793,32 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                     sc->memmap[ASPEED_DEV_HACE]);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->hace), 0,
                        aspeed_soc_get_irq(s, ASPEED_DEV_HACE));
+
+    /*
+     * AST2050 (G3) clock-stop / reset-hold faithfulness (HW findings #94/#93).
+     *
+     * The G3 SCU drives three side-effect lines (see aspeed_scu.c):
+     *  - SCU0C[15] "Stop UARTCLK" gates BOTH G3 UARTs — UART1 @0x1E783000 and
+     *    UART2 @0x1E784000 (the model's UART1 and UART5 slots). Proven on
+     *    silicon: the kernel's clk_disable_unused set this bit at t=4.16s and
+     *    the live console died (HWPASS-PROGRESS.md §C.8, task #94).
+     *  - SCU0C[8]  "Stop LCLK" gates the LPC controller (KCS/BT/snoop).
+     *  - SCU04[2]  holds the whole 7-engine I2C controller in reset
+     *    (reset default = held; firmware must de-assert before using I2C).
+     *
+     * A clock-dead / reset-held APB block's register file is inert: the MMIO
+     * region is disabled so reads fall through to the background (return 0),
+     * writes are dropped, and no IRQ can be raised — which is exactly how the
+     * failure presents on real silicon (silent console; I2C never completes).
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-uartclk-stop", 0,
+            qemu_allocate_irq(aspeed_2050_uartclk_stop, s, 0));
+        qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-lclk-stop", 0,
+            qemu_allocate_irq(aspeed_2050_lclk_stop, a, 0));
+        qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-i2c-rst", 0,
+            qemu_allocate_irq(aspeed_2050_i2c_rst, s, 0));
+    }
 }
 
 static void aspeed_soc_ast2400_class_init(ObjectClass *oc, void *data)
