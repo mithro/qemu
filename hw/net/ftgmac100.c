@@ -300,11 +300,24 @@ static void ftgmac100_set_link(NetClientState *nc)
 
 static void phy_reset(FTGMAC100State *s)
 {
+    /*
+     * On the AST2050 (G3) the board (ASUS KGPE-D16) wires the MAC's RMII link
+     * to a dedicated 10/100 Realtek RTL8201CP PHY (F7-NCSI.md; DTS phy-mode=rmii;
+     * DATASHEET-MAC.md §5). The RTL8201CP is 10/100-only: its BMSR has NO extended
+     * status (reg 15 absent, so MII_BMSR_EXTSTAT=0) and its BMCR reset default is
+     * 0x3100 (autoneg + 100M + full-duplex) — it never advertises gigabit. The
+     * AST2400+ default keeps the RTL8211E gigabit surface (EXTSTAT + SPEED1000),
+     * which the Dell C410X (C4) vendor firmware expects. See do_phy_read().
+     */
     s->phy_status = (MII_BMSR_100TX_FD | MII_BMSR_100TX_HD | MII_BMSR_10T_FD |
-                     MII_BMSR_10T_HD | MII_BMSR_EXTSTAT | MII_BMSR_MFPS |
+                     MII_BMSR_10T_HD | MII_BMSR_MFPS |
                      MII_BMSR_AN_COMP | MII_BMSR_AUTONEG | MII_BMSR_LINK_ST |
                      MII_BMSR_EXTCAP);
-    s->phy_control = (MII_BMCR_AUTOEN | MII_BMCR_FD | MII_BMCR_SPEED1000);
+    if (!s->aspeed_g3) {
+        s->phy_status |= MII_BMSR_EXTSTAT;      /* gigabit extended status */
+    }
+    s->phy_control = (MII_BMCR_AUTOEN | MII_BMCR_FD |
+                      (s->aspeed_g3 ? MII_BMCR_SPEED100 : MII_BMCR_SPEED1000));
     s->phy_advertise = (MII_ANAR_PAUSE_ASYM | MII_ANAR_PAUSE | MII_ANAR_TXFD |
                         MII_ANAR_TX | MII_ANAR_10FD | MII_ANAR_10 |
                         MII_ANAR_CSMACD);
@@ -324,10 +337,11 @@ static uint16_t do_phy_read(FTGMAC100State *s, uint8_t reg)
         val = s->phy_status;
         break;
     case MII_PHYID1: /* ID1 */
-        val = RTL8211E_PHYID1;
+        /* G3/KGPE-D16: dedicated RTL8201CP (10/100). Else RTL8211E (C4). */
+        val = s->aspeed_g3 ? RTL8201CP_PHYID1 : RTL8211E_PHYID1;
         break;
     case MII_PHYID2: /* ID2 */
-        val = RTL8211E_PHYID2;
+        val = s->aspeed_g3 ? RTL8201CP_PHYID2 : RTL8211E_PHYID2;
         break;
     case MII_ANAR: /* Auto-neg advertisement */
         val = s->phy_advertise;
@@ -341,10 +355,11 @@ static uint16_t do_phy_read(FTGMAC100State *s, uint8_t reg)
         val = MII_ANER_NWAY;
         break;
     case MII_CTRL1000: /* 1000BASE-T control  */
-        val = (MII_CTRL1000_HALF | MII_CTRL1000_FULL);
+        /* RTL8201CP (G3) is 10/100-only: no gigabit control/status registers. */
+        val = s->aspeed_g3 ? 0 : (MII_CTRL1000_HALF | MII_CTRL1000_FULL);
         break;
     case MII_STAT1000: /* 1000BASE-T status  */
-        val = MII_STAT1000_FULL;
+        val = s->aspeed_g3 ? 0 : MII_STAT1000_FULL;
         break;
     case RTL8211E_MII_INSR:  /* Interrupt status.  */
         val = s->phy_int;
