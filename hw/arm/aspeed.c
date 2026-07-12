@@ -74,6 +74,12 @@ struct AspeedMachineState {
  * ASUS KGPE-D16 BMC (AST2050): 128 MB DDR2, 24 MHz input clock, SPI boot.
  * Modelled on the palmetto straps with AST2050-appropriate DRAM size and the
  * AST2050's fixed 24 MHz reference clock.
+ *
+ * VGA memory size = 8 MB, hardware-verified: the live SCU70[3:2] strap on the
+ * real board is 00 — JTAG ddr2-init.tcl computes MCR04 = 0x585 | (SCU70[3:2]
+ * << 2) and printed "MCR04 = 0x00000585" on the real chip (bits [5:4] = 00 =
+ * 8 MB aperture; asus-kgpe-d16-firmware/JTAG-USAGE-GUIDE.md). The video-engine
+ * model sizes its internal-VGA capture source from this strap.
  */
 #define KGPE_D16_BMC_HW_STRAP1 (                                        \
         SCU_AST2400_HW_STRAP_DRAM_SIZE(DRAM_SIZE_128MB) |               \
@@ -85,7 +91,7 @@ struct AspeedMachineState {
         SCU_HW_STRAP_SPI_MODE(SCU_HW_STRAP_SPI_M_S_EN) |                \
         SCU_AST2400_HW_STRAP_SET_CPU_AHB_RATIO(AST2400_CPU_AHB_RATIO_2_1) | \
         SCU_HW_STRAP_SPI_WIDTH |                                        \
-        SCU_HW_STRAP_VGA_SIZE_SET(VGA_16M_DRAM) |                       \
+        SCU_HW_STRAP_VGA_SIZE_SET(VGA_8M_DRAM) |                        \
         SCU_AST2400_HW_STRAP_BOOT_MODE(AST2400_SPI_BOOT))
 
 /* TODO: Find the actual hardware value */

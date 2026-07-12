@@ -130,6 +130,9 @@ static const int aspeed_soc_ast2400_irqmap[] = {
     [ASPEED_DEV_XDMA]   = 6,
     [ASPEED_DEV_SDHCI]  = 26,
     [ASPEED_DEV_HACE]   = 4,
+    /* AST2050/AST1100 datasheet §10 p.99: Video Engine = INT#7 (the same
+     * source number the aspeed-g4.dtsi video node uses on the AST2400). */
+    [ASPEED_DEV_VIDEO]  = 7,
 };
 
 #define aspeed_soc_ast2500_irqmap aspeed_soc_ast2400_irqmap
@@ -343,15 +346,30 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                                   ASPEED_SOC_IOMEM_SIZE);
 
     /*
-     * Video engine. The AST2050 (G3) has a real video engine (KVM screen capture)
-     * that OpenBMC's aspeed-video driver uses; give it a real device (VR000
-     * protection-key + RW registers). AST2400/2500 keep the unimplemented stub.
-     * The capture IRQ (INT7) is left unconnected pending the capture behaviour.
+     * Video engine. The AST2050 (G3) has a real video engine (KVM screen
+     * capture) that OpenBMC's aspeed-video driver uses; give it a real device
+     * (VR000 protection-key + capture datapath). AST2400/2500 keep the
+     * unimplemented stub. The engine reads its "internal VGA" source out of the
+     * VGA carve-out at the top of DRAM, whose size comes from the SCU70[3:2]
+     * strap (datasheet §18.2 p.217, referenced by MCR04[5:4] §17 p.185:
+     * 00=8MB 01=16MB 10=32MB 11=64MB), and DMAs the compressed stream into the
+     * driver-programmed buffers (M-Bus, §20.2 p.232). The completion IRQ
+     * (INT#7) is wired to the VIC after the VIC is realized below.
      * See qemu-model/peripherals/video.
      */
     if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        uint32_t strap1 = object_property_get_uint(OBJECT(&s->scu), "hw-strap1",
+                                                   &error_abort);
+        uint32_t vga_mem_size = (8 * MiB) << SCU_HW_STRAP_VGA_SIZE_GET(strap1);
+
         object_initialize_child(OBJECT(dev), "video-g3", &a->video_g3,
                                 TYPE_ASPEED_VIDEO_AST2050);
+        object_property_set_link(OBJECT(&a->video_g3), "dram",
+                                 OBJECT(s->dram_mr), &error_abort);
+        object_property_set_uint(OBJECT(&a->video_g3), "dram-base",
+                                 sc->memmap[ASPEED_DEV_SDRAM], &error_abort);
+        object_property_set_uint(OBJECT(&a->video_g3), "vga-mem-size",
+                                 vga_mem_size, &error_abort);
         if (!sysbus_realize(SYS_BUS_DEVICE(&a->video_g3), errp)) {
             return;
         }
@@ -395,6 +413,15 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                        qdev_get_gpio_in(DEVICE(&a->cpu), ARM_CPU_IRQ));
     sysbus_connect_irq(SYS_BUS_DEVICE(&a->vic), 1,
                        qdev_get_gpio_in(DEVICE(&a->cpu), ARM_CPU_FIQ));
+
+    /*
+     * AST2050 (G3) video engine completion IRQ: INT#7 (datasheet §10 p.99),
+     * deferred from the video realize above because the VIC did not exist yet.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->video_g3), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_VIDEO));
+    }
 
     /*
      * AST2050 (G3) PWM/tachometer. Mainline QEMU leaves 0x1E786000 unmapped; the
