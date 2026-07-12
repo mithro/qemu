@@ -33,6 +33,15 @@
 /* Configuration Register */
 #define R_CONF            (0x04 / 4)
 
+/*
+ * AST2050 / AST1100 (G3) DDR2 AST2000-backward-compatible shadow registers.
+ * Read-only; see the AST2050/AST1100 A3 datasheet §17 p201 and
+ * qemu-model/peripherals/sdram/DATASHEET-SDRAM.md.
+ */
+#define R_MCR100             (0x100 / 4)   /* AST2000-compat SCU password: RO 0xA8 */
+#define R_MCR170             (0x170 / 4)   /* AST2000-compat HW-strap:     RO 0     */
+#define MCR100_COMPAT_VALUE  0x000000A8u
+
 /* Interrupt control/status */
 #define R_ISR             (0x50 / 4)
 
@@ -691,9 +700,120 @@ static const TypeInfo aspeed_2700_sdmc_info = {
     .class_init = aspeed_2700_sdmc_class_init,
 };
 
+/*
+ * AST2050 / AST1100 (G3) DDR2 SDRAM Memory Controller.
+ *
+ * Faithful model of the DDR2 controller documented in the ASPEED AST2050/AST1100
+ * A3 datasheet §17 (see qemu-model/peripherals/sdram/DATASHEET-SDRAM.md). It differs
+ * from the AST2400/G4 DDR3 model above in the ways the bare-metal fwtest and the
+ * real-silicon JTAG capture pin down:
+ *
+ *  - MCR04 (config) resets to 0. The AST2050 has NO SPD / strap / probe DRAM
+ *    sizing; firmware WRITES the geometry into MCR04 from a compile-time constant
+ *    and later reads it back to discover it (datasheet §17 p185, §5). So this model
+ *    must NOT synthesise MCR04 from the machine RAM size (as the DDR3 model does)
+ *    and must store the written value verbatim. The real KGPE-D16 value, captured
+ *    live over JTAG, is MCR04 = 0x00000585 = 4-bank / 64 MB / 16-bit / BL4 / 10-col
+ *    (asus-kgpe-d16-firmware/JTAG-USAGE-GUIDE.md; DATASHEET-SDRAM.md §2.2).
+ *  - MCR00 protection is a 1-bit lock latch: unlock key 0xFC600309 -> reads 1, any
+ *    other write -> reads 0; resets locked, reads 0 (datasheet p184).
+ *  - MCR100 is the AST2000-compat SCU-password shadow: read-only, reads 0xA8
+ *    (datasheet p201). MCR170 is the AST2000-compat HW-strap shadow: read-only 0.
+ *  - There is no DDR3 PHY block (the 0x100/0x400 eye-window regs) on the G3, so the
+ *    reset does not populate any PHY status/eye-window registers.
+ *
+ * Note on MCR04[6] (read-only bus-width status, decoded from [9:8] per the
+ * datasheet): we model MCR04 as a plain RW latch so a read-back equals what
+ * firmware wrote (0x585), matching the only value captured on real silicon. A
+ * status-mirror of bit6 would make the read-back 0x5C5, for which there is no
+ * capture; if hardware read-back evidence for bit6 appears, add the mirror here.
+ */
+static void aspeed_2050_sdmc_reset(DeviceState *dev)
+{
+    AspeedSDMCState *s = ASPEED_SDMC(dev);
+
+    memset(s->regs, 0, sizeof(s->regs));
+
+    /*
+     * MCR04 (config) Init = 0 on real HW: firmware writes the DDR2 geometry.
+     * Deliberately do NOT synthesise it from ram_size (unlike the DDR3 model).
+     * MCR00 resets locked -> reads 0 (left 0 by the memset).
+     */
+    s->regs[R_MCR100] = MCR100_COMPAT_VALUE;   /* datasheet p201, reads 0xA8 */
+
+    if (s->unlocked) {
+        s->regs[R_PROT] = PROT_UNLOCKED;
+    }
+}
+
+static void aspeed_2050_sdmc_write(AspeedSDMCState *s, uint32_t reg, uint32_t data)
+{
+    if (reg == R_PROT) {
+        /* 1-bit lock latch; read-back is the lock state, not the key (p184). */
+        s->regs[reg] =
+            (data == PROT_KEY_UNLOCK) ? PROT_UNLOCKED : PROT_SOFTLOCKED;
+        return;
+    }
+
+    if (!s->regs[R_PROT]) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: SDMC is locked!\n", __func__);
+        return;
+    }
+
+    switch (reg) {
+    case R_MCR100:
+    case R_MCR170:
+        /* AST2000-compat shadows are read-only (datasheet p201). */
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: write to read-only MCR%03x ignored\n",
+                      __func__, reg * 4);
+        return;
+    default:
+        break;
+    }
+
+    /*
+     * Every other MCRxx -- including MCR04 config -- is a plain RW latch on the
+     * AST2050 DDR2 controller: store the firmware-written value verbatim (no
+     * DDR3-style recompute / ram_size synthesis). Firmware and U-Boot read MCR04
+     * back to discover the geometry (datasheet §17 p185, §5).
+     */
+    s->regs[reg] = data;
+}
+
+/*
+ * Datasheet caps total capacity at 256 MB (MCR04[3:2], p185/p201). The real
+ * KGPE-D16 board is 64 MB. MCR04 is not synthesised from this list (there is no
+ * compute_conf); it only bounds/validates the machine ram-size property.
+ */
+static const uint64_t
+aspeed_2050_ram_sizes[] = { 64 * MiB, 128 * MiB, 256 * MiB, 0 };
+
+static void aspeed_2050_sdmc_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    AspeedSDMCClass *asc = ASPEED_SDMC_CLASS(klass);
+
+    dc->desc = "ASPEED 2050 DDR2 SDRAM Memory Controller";
+    device_class_set_legacy_reset(dc, aspeed_2050_sdmc_reset);
+
+    asc->max_ram_size = 256 * MiB;
+    /* No compute_conf: MCR04 is firmware-written verbatim on the G3, not synthesised. */
+    asc->compute_conf = NULL;
+    asc->write = aspeed_2050_sdmc_write;
+    asc->valid_ram_sizes = aspeed_2050_ram_sizes;
+}
+
+static const TypeInfo aspeed_2050_sdmc_info = {
+    .name = TYPE_ASPEED_2050_SDMC,
+    .parent = TYPE_ASPEED_SDMC,
+    .class_init = aspeed_2050_sdmc_class_init,
+};
+
 static void aspeed_sdmc_register_types(void)
 {
     type_register_static(&aspeed_sdmc_info);
+    type_register_static(&aspeed_2050_sdmc_info);
     type_register_static(&aspeed_2400_sdmc_info);
     type_register_static(&aspeed_2500_sdmc_info);
     type_register_static(&aspeed_2600_sdmc_info);
