@@ -793,6 +793,22 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                         sc->memmap[ASPEED_DEV_LPC]);
         sysbus_connect_irq(SYS_BUS_DEVICE(&a->lpc_g3), 0,
                            aspeed_soc_get_irq(s, ASPEED_DEV_LPC));
+
+        /*
+         * AST2050 (G3) P2A PCI->AHB back door (the culvert `p2a` path). It has
+         * no AHB-side register file (the P2A00/P2A04 control regs live behind
+         * PCI-slave BAR1, host-side), so it is not MMIO-mapped; instead it
+         * masters the AHB (linked to s->memory) to service the host aperture
+         * cycles driven through its QOM back-channel. See
+         * qemu-model/peripherals/p2a and hw/misc/aspeed_p2a_ast2050.c.
+         */
+        object_initialize_child(OBJECT(dev), "p2a-g3", &a->p2a_g3,
+                                TYPE_ASPEED_P2A_AST2050);
+        object_property_set_link(OBJECT(&a->p2a_g3), "ahb",
+                                 OBJECT(s->memory), &error_abort);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->p2a_g3), errp)) {
+            return;
+        }
     }
 
     /* HACE */
