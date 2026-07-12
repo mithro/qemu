@@ -10,6 +10,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/irq.h"
 #include "hw/misc/aspeed_scu.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
@@ -683,6 +684,67 @@ static const TypeInfo aspeed_2400_scu_info = {
     .class_init = aspeed_2400_scu_class_init,
 };
 
+/*
+ * AST2050 (G3) clock-stop / reset-hold side effects (HW findings #94/#93).
+ *
+ * On the real G3, SCU0C[15] is ONE clock gate shared by BOTH UARTs (the
+ * console at 0x1E784000 is the G3's UART2), SCU0C[8] gates the LPC
+ * controller's LCLK, and SCU04[2] holds the whole 7-engine I2C controller in
+ * reset (reset default 1 = held; datasheet §18 p205-210). Silicon proof for
+ * the UART gate: the modern kernel's clk_disable_unused set SCU0C[15] at
+ * t=4.16s and the live serial console died on the real KGPE-D16
+ * (openbmc/bmc-functionality/HWPASS-PROGRESS.md §C.8, task #94).
+ *
+ * The SoC connects these lines and makes the affected register files inert
+ * (reads 0 / writes dropped) — the observable behaviour of a clock-dead or
+ * reset-held APB block. Propagated on every SCU04/SCU0C write and on reset.
+ */
+static void aspeed_2050_scu_propagate_gates(AspeedSCUState *s)
+{
+    qemu_set_irq(s->g3_uartclk_stop, !!(s->regs[CLK_STOP_CTRL] & BIT(15)));
+    qemu_set_irq(s->g3_lclk_stop,    !!(s->regs[CLK_STOP_CTRL] & BIT(8)));
+    qemu_set_irq(s->g3_i2c_rst,      !!(s->regs[SYS_RST_CTRL]  & BIT(2)));
+}
+
+static void aspeed_ast2050_scu_write(void *opaque, hwaddr offset,
+                                     uint64_t data, unsigned size)
+{
+    AspeedSCUState *s = ASPEED_SCU(opaque);
+    int reg = TO_REG(offset);
+
+    aspeed_ast2400_scu_write(opaque, offset, data, size);
+
+    if (reg == SYS_RST_CTRL || reg == CLK_STOP_CTRL) {
+        aspeed_2050_scu_propagate_gates(s);
+    }
+}
+
+static const MemoryRegionOps aspeed_ast2050_scu_ops = {
+    .read = aspeed_scu_read,
+    .write = aspeed_ast2050_scu_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+};
+
+static void aspeed_2050_scu_instance_init(Object *obj)
+{
+    AspeedSCUState *s = ASPEED_SCU(obj);
+
+    qdev_init_gpio_out_named(DEVICE(obj), &s->g3_uartclk_stop,
+                             "g3-uartclk-stop", 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->g3_lclk_stop,
+                             "g3-lclk-stop", 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->g3_i2c_rst,
+                             "g3-i2c-rst", 1);
+}
+
 static void aspeed_2050_scu_reset(DeviceState *dev)
 {
     AspeedSCUState *s = ASPEED_SCU(dev);
@@ -701,6 +763,15 @@ static void aspeed_2050_scu_reset(DeviceState *dev)
      */
     s->regs[MPLL_PARAM] = 0x00004291;
     s->regs[HPLL_PARAM] = 0x00004291;
+
+    /*
+     * Apply the G3 gate/reset-hold state for the reset values: UARTCLK and
+     * LCLK run at reset (SCU0C 0x...3E8B: bits 15/8 = 0), the I2C controller
+     * starts HELD IN RESET (SCU04 bit2 = 1 in both the AST2400 table value
+     * 0xFFCFFEDC and the G3 datasheet value 0x000FFE5C) until firmware
+     * de-asserts it — exactly like silicon.
+     */
+    aspeed_2050_scu_propagate_gates(s);
 }
 
 static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
@@ -737,13 +808,18 @@ static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
     asc->apb_divider = 2;
     asc->nr_regs = ASPEED_SCU_NR_REGS;
     asc->clkin_25Mhz = false;
-    asc->ops = &aspeed_ast2400_scu_ops;
+    /*
+     * AST2400 ops + G3 clock-stop/reset-hold side-effect propagation
+     * (g3-uartclk-stop / g3-lclk-stop / g3-i2c-rst named lines).
+     */
+    asc->ops = &aspeed_ast2050_scu_ops;
 }
 
 static const TypeInfo aspeed_2050_scu_info = {
     .name = TYPE_ASPEED_2050_SCU,
     .parent = TYPE_ASPEED_SCU,
     .instance_size = sizeof(AspeedSCUState),
+    .instance_init = aspeed_2050_scu_instance_init,
     .class_init = aspeed_2050_scu_class_init,
 };
 
