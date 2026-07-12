@@ -8,6 +8,11 @@
  * This is the G3 layout, NOT the AST2400 aspeed_lpc which puts KCS/iBT at the
  * 0x140 offsets. See qemu-model/peripherals/lpc.
  *
+ * The KCS channels implement the faithful H8S/2168-style OBF/IBF/C-D handshake
+ * (STRn semantics, datasheet p.315-316) with the IBF interrupt to VIC #8; the
+ * host (LPC I/O port) side is driven via the host-kcs<N>-{data,cmdsts} QOM
+ * properties (see aspeed_lpc_ast2050.c) since this machine has no host CPU.
+ *
  * This code is licensed under the GPL version 2 or later.
  */
 #ifndef ASPEED_LPC_AST2050_H
