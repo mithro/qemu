@@ -52,6 +52,18 @@ struct AspeedSCUState {
     qemu_irq g3_uartclk_stop;   /* SCU0C[15]: UART1+UART2 (one shared gate) */
     qemu_irq g3_lclk_stop;      /* SCU0C[8]:  LPC controller clock          */
     qemu_irq g3_i2c_rst;        /* SCU04[2]:  I2C/SMBus controller reset    */
+
+    /*
+     * AST2050 (G3) only: use the datasheet-faithful G3 reset table
+     * (ast2050_a3_resets) instead of the AST2400-compat default. Off by
+     * default because the AST2400-tuned legacy firmware (the OpenBMC AST2400
+     * U-Boot behind C2/C3/C4 and the RE-patched Dell vendor image) reads
+     * AST2400 SCU values the faithful G3 map zeroes. The genuinely G3-aware
+     * Raptor AST2050 U-Boot (which runs the real DDR2 init) boots with it ON,
+     * validating the G3 reset table -- see qemu-model/peripherals/scu/DOC.md §4.
+     * Set via `-global aspeed.scu-ast2050.g3-resets=true`.
+     */
+    bool g3_resets;
 };
 
 #define AST2400_A0_SILICON_REV   0x02000303U

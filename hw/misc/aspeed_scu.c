@@ -221,7 +221,7 @@ static const uint32_t ast2400_a0_resets[ASPEED_SCU_NR_REGS] = {
  * the datasheet-documented G3 registers are seeded; PROT_KEY, HW_STRAP1 and
  * SILICON_REV are overwritten from properties in aspeed_scu_reset().
  */
-static const uint32_t ast2050_a3_resets[ASPEED_SCU_NR_REGS] G_GNUC_UNUSED = {
+static const uint32_t ast2050_a3_resets[ASPEED_SCU_NR_REGS] = {
      [SYS_RST_CTRL]    = 0x000FFE5CU, /* SCU04 p205                          */
      [CLK_SEL]         = 0xE3F00070U, /* SCU08 p207                          */
      [CLK_STOP_CTRL]   = 0x000C3E8BU, /* SCU0C p209                          */
@@ -641,6 +641,12 @@ static const Property aspeed_scu_properties[] = {
     DEFINE_PROP_UINT32("hw-strap1", AspeedSCUState, hw_strap1, 0),
     DEFINE_PROP_UINT32("hw-strap2", AspeedSCUState, hw_strap2, 0),
     DEFINE_PROP_UINT32("hw-prot-key", AspeedSCUState, hw_prot_key, 0),
+    /*
+     * AST2050 (G3) only: present the datasheet-faithful G3 SCU reset table
+     * instead of the AST2400-compat default. Off by default (legacy AST2400
+     * firmware needs the AST2400 values); a G3-aware firmware sets it on.
+     */
+    DEFINE_PROP_BOOL("g3-resets", AspeedSCUState, g3_resets, false),
 };
 
 static void aspeed_scu_class_init(ObjectClass *klass, void *data)
@@ -748,6 +754,30 @@ static void aspeed_2050_scu_instance_init(Object *obj)
 static void aspeed_2050_scu_reset(DeviceState *dev)
 {
     AspeedSCUState *s = ASPEED_SCU(dev);
+    AspeedSCUClass *asc = ASPEED_SCU_GET_CLASS(dev);
+
+    if (s->g3_resets) {
+        /*
+         * Datasheet-faithful G3 reset state (AST2050/AST1100 A3 datasheet V1.05
+         * §18, pp.204-220 -- see qemu-model/peripherals/scu/DATASHEET-SCU.md).
+         * Opt-in via `-global aspeed.scu-ast2050.g3-resets=true`. This is what the
+         * real silicon presents at reset (SCU04=0x000FFE5C, SCU08=0xE3F00070,
+         * SCU0C=0x000C3E8B, SCU74=0x40048000, ...) and what a genuinely G3-aware
+         * firmware (Raptor's AST2050 U-Boot) expects. It intentionally zeroes the
+         * AST2400-only registers (UART_HPLL_CLK, SOC_SCRATCH1 DRAM-ready, ...) that
+         * the AST2400-tuned legacy boots (C2/C3/C4) relied on -- so those keep the
+         * default AST2400 table (g3-resets=false). See DOC.md §4 (co-evolution).
+         */
+        memset(s->regs, 0, asc->nr_regs * 4);
+        memcpy(s->regs, ast2050_a3_resets, sizeof(ast2050_a3_resets));
+        s->regs[SILICON_REV] = s->silicon_rev;   /* SCU7C = 0x00000202 */
+        s->regs[HW_STRAP1]   = s->hw_strap1;
+        s->regs[HW_STRAP2]   = s->hw_strap2;
+        s->regs[PROT_KEY]    = s->hw_prot_key;
+        /* SCU20/24 already 0x00004291 in the G3 table (post-div /2 -> 133 MHz). */
+        aspeed_2050_scu_propagate_gates(s);
+        return;
+    }
 
     aspeed_scu_reset(dev);   /* AST2400 table + rev/strap/prot-key overrides */
     /*
