@@ -25,6 +25,8 @@
  * GPIO<port><n> maps to (set, group*8 + n). All request lines are active-low.
  * Source: HW-WIRING-power-sensors.md §1.1 (Raptor's board CSV).
  */
+#define KGPE_D16_A4_SET 0   /* GPIOA4 ASUS_BMC_CTL_LOCKOUT_N (BMC-in-control gate) */
+#define KGPE_D16_A4_BIT 4
 #define KGPE_D16_B1_SET 0   /* GPIOB1 CTL_REQ_POWERUP_N   (power-on request) */
 #define KGPE_D16_B1_BIT 9
 #define KGPE_D16_F0_SET 1   /* GPIOF0 CTL_REQ_POWERDOWN_N (force-off request) */
@@ -405,6 +407,13 @@ static bool aspeed_gpio_out_low(AspeedGPIOState *s, int set, int bit)
     return (s->sets[set].direction & mask) && !(s->sets[set].data_value & mask);
 }
 
+/* True iff (set, bit) is currently driven as an output at logic high. */
+static bool aspeed_gpio_out_high(AspeedGPIOState *s, int set, int bit)
+{
+    uint32_t mask = 1U << bit;
+    return (s->sets[set].direction & mask) && (s->sets[set].data_value & mask);
+}
+
 /*
  * ASUS KGPE-D16 (AST2050) board power sequencer.
  *
@@ -412,7 +421,8 @@ static bool aspeed_gpio_out_low(AspeedGPIOState *s, int set, int bit)
  * three active-low *request* lines into the board's power-sequencing glue and
  * senses the resulting mainboard rail on a fourth line:
  *
- *   GPIOB1 CTL_REQ_POWERUP_N   pulse low -> engage host power
+ *   GPIOA4 ASUS_BMC_CTL_LOCKOUT_N drive high -> BMC-in-control (gates power-on)
+ *   GPIOB1 CTL_REQ_POWERUP_N   pulse low -> engage host power (needs A4 high)
  *   GPIOF0 CTL_REQ_POWERDOWN_N pulse low -> force host power off
  *   GPIOB6 CTL_REQ_RESET_N     pulse low -> warm reset (power stays on)
  *   GPIOH2 STA_LINE_POWER      input, 1 = powered on, 0 = off
@@ -425,12 +435,21 @@ static bool aspeed_gpio_out_low(AspeedGPIOState *s, int set, int bit)
  * the power state unchanged. Because each request line is only momentarily
  * pulsed, the latch — not the instantaneous pin level — holds the host state.
  *
+ * HARDWARE FINDING (verified 2026-07-13 on the real AST2050): the board only
+ * honours the CTL_REQ_POWERUP_N power-on request while the BMC-control-lockout
+ * line GPIOA4 (ASUS_BMC_CTL_LOCKOUT_N) is driven HIGH as a real GPIO output
+ * ("BMC in control"). A4's pad defaults to the PHYLINK alt-function
+ * (SCU74[25]=1), so a stock image cannot drive it and the board IGNORES the
+ * power-up request — the host can only ever be force-OFF, never powered ON.
+ * Force-OFF (GPIOF0) works regardless of A4. We therefore gate ONLY the
+ * power-up path on A4 being a driven-high output.
+ *
  * Gated by the kgpe-d16-pwrseq qdev property, which only the kgpe-d16-bmc
  * machine sets; every other Aspeed board leaves it off and is unaffected.
  */
 static void aspeed_gpio_kgpe_d16_pwrseq(AspeedGPIOState *s)
 {
-    bool force_off, power_up, new_on;
+    bool force_off, power_up, bmc_in_control, new_on;
 
     /* Driving GPIOH2 re-enters aspeed_gpio_update(); do not recurse. */
     if (s->kgpe_d16_pwrseq_busy) {
@@ -439,12 +458,16 @@ static void aspeed_gpio_kgpe_d16_pwrseq(AspeedGPIOState *s)
 
     force_off = aspeed_gpio_out_low(s, KGPE_D16_F0_SET, KGPE_D16_F0_BIT);
     power_up  = aspeed_gpio_out_low(s, KGPE_D16_B1_SET, KGPE_D16_B1_BIT);
+    /* BMC-in-control gate: A4 driven high as an output reclaims power control. */
+    bmc_in_control = aspeed_gpio_out_high(s, KGPE_D16_A4_SET, KGPE_D16_A4_BIT);
     /* GPIOB6 reset-req-n is a warm reset: it never changes the power latch. */
 
     new_on = s->kgpe_d16_host_on;
     if (force_off) {
+        /* Force-off always wins and does NOT need the A4 reclaim. */
         new_on = false;
-    } else if (power_up) {
+    } else if (power_up && bmc_in_control) {
+        /* Power-up is honoured ONLY while the BMC holds A4 high (silicon). */
         new_on = true;
     }
     s->kgpe_d16_host_on = new_on;
