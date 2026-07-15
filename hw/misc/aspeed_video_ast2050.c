@@ -30,10 +30,14 @@
  *    the VGA carve-out (stride = width*4). On silicon the mode/format follow
  *    the host's VGA mode-set; the BMC-only machine has no VGA controller model,
  *    so this fixed scanout stands in for "the host set 640x480x32".
- *  - The compressed bitstream is a self-contained baseline JFIF JPEG (YCbCr
- *    4:4:4, quality from VR060[15:11]). The datasheet documents the buffer /
- *    trigger / status semantics but not the G3 bitstream format; a standard
- *    JPEG is what the (G4-class) aspeed-video driver + userspace consume.
+ *  - The bitstream is a baseline JPEG (YCbCr 4:4:4) using the AST2050 ROM
+ *    quantization tables selected by VR060[15:11] (one of 8) and the standard
+ *    Annex-K Huffman tables. In pure-JPEG mode (VR060[0]=1, as the AST2050
+ *    aspeed-video driver sets) the engine emits ONLY the entropy-coded stream --
+ *    no JFIF header, no EOI -- because register 0x040 is the CRC buffer, not a
+ *    header buffer; the driver rebuilds the header in software. This matches
+ *    real silicon. Without VR060[0] the model emits a self-contained JFIF (for
+ *    a G4-class driver that expects the engine to prepend the header).
  *
  * This code is licensed under the GPL version 2 or later.
  */
@@ -71,6 +75,7 @@
 
 /* VR060 — compression control (p.244-246) */
 #define VR_COMP_CTRL            0x060
+#define  COMP_CTRL_JPEG_ONLY    BIT(0)     /* [0] 1 = pure-JPEG (headerless) mode */
 #define  COMP_CTRL_DCT_LUM_SHIFT 11       /* [15:11] luminance quant select */
 
 /* Read-back counters (p.246-247) */
@@ -134,12 +139,13 @@
 #define MAX_HEIGHT       1200
 
 /* ------------------------------------------------------------------------- */
-/* Minimal baseline JFIF JPEG encoder (YCbCr 4:4:4, interleaved 8x8 MCUs).    */
+/* Minimal baseline JPEG encoder (YCbCr 4:4:4, interleaved 8x8 MCUs).         */
 /*                                                                            */
-/* Quantization: ITU-T T.81 Annex K.1/K.2 tables scaled by the VR060[15:11]  */
-/* quality index (0..11) using the IJG percent-quality formula. Entropy:      */
-/* Annex K.3 typical Huffman tables (as vendored in                          */
-/* linux/drivers/media/platform/chips-media/coda-jpeg.c).                     */
+/* Quantization: the AST2050 internal-ROM tables selected by VR060[15:11]     */
+/* (one of 8), transcribed from the Linux aspeed-video driver's jpeg_dct[]    */
+/* below -- NOT generic Annex-K tables scaled by quality, so the entropy      */
+/* matches what the driver's software JFIF header declares. Entropy coding:    */
+/* Annex K.3 typical Huffman tables (identical to the driver's jpeg_quant).   */
 /* ------------------------------------------------------------------------- */
 
 typedef struct JpegBuf {
@@ -148,6 +154,8 @@ typedef struct JpegBuf {
     size_t cap;
     uint32_t bitbuf;
     int bitcnt;
+    size_t body_off;    /* offset of the entropy-coded segment (after SOS) */
+    size_t body_len;    /* length of the entropy-coded segment (before EOI) */
 } JpegBuf;
 
 static const uint8_t jpeg_zigzag[64] = {
@@ -157,26 +165,179 @@ static const uint8_t jpeg_zigzag[64] = {
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 };
 
-/* ITU-T T.81 Annex K.1 / K.2 quantization tables (raster order). */
-static const uint8_t jpeg_std_quant_luma[64] = {
-    16, 11, 10, 16,  24,  40,  51,  61,
-    12, 12, 14, 19,  26,  58,  60,  55,
-    14, 13, 16, 24,  40,  57,  69,  56,
-    14, 17, 22, 29,  51,  87,  80,  62,
-    18, 22, 37, 56,  68, 109, 103,  77,
-    24, 35, 55, 64,  81, 104, 113,  92,
-    49, 64, 78, 87, 103, 121, 120, 101,
-    72, 92, 95, 98, 112, 100, 103,  99,
+/*
+ * AST2050 ROM quantization tables (raster order), extracted from the Linux
+ * aspeed-video driver's jpeg_dct[0..7] DQT segments (VR060[15:11] selects one of
+ * 8, p.244-246). These ARE the engine's fixed internal-ROM tables -- not the
+ * generic Annex-K tables scaled by quality -- so the headerless entropy the G3
+ * emits is decoded by exactly these tables. The driver's software JFIF header
+ * carries the very same tables, so QEMU's stream + the driver's header compose
+ * into a standards-compliant JPEG, matching real silicon.
+ * Regenerate with tools: tmp/vga-fix/gen-quant-tables.py.
+ */
+static const uint8_t ast2050_quant_luma[8][64] = {
+    { /* sel 0 */
+         20,  13,  12,  20,  30,  50,  63,  76,
+         15,  15,  17,  23,  32,  72,  75,  68,
+         17,  16,  20,  30,  50,  71,  86,  70,
+         17,  21,  27,  36,  63, 108, 100,  77,
+         22,  27,  46,  70,  85, 136, 128,  96,
+         30,  43,  68,  80, 101, 130, 141, 115,
+         61,  80,  97, 108, 128, 151, 150, 126,
+         90, 115, 118, 122, 140, 125, 128, 123,
+    },
+    { /* sel 1 */
+         17,  12,  10,  17,  26,  43,  55,  66,
+         13,  13,  15,  20,  28,  63,  65,  60,
+         15,  14,  17,  26,  43,  62,  75,  61,
+         15,  18,  24,  31,  55,  95,  87,  67,
+         19,  24,  40,  61,  74, 119, 112,  84,
+         26,  38,  60,  70,  88, 113, 123, 100,
+         53,  70,  85,  95, 112, 132, 131, 110,
+         78, 100, 103, 107, 122, 109, 112, 108,
+    },
+    { /* sel 2 */
+         14,   9,   9,  14,  21,  36,  46,  55,
+         10,  10,  12,  17,  23,  52,  54,  49,
+         12,  11,  14,  21,  36,  51,  62,  50,
+         12,  15,  19,  26,  46,  78,  72,  56,
+         16,  19,  33,  50,  61,  98,  93,  69,
+         21,  31,  49,  58,  73,  94, 102,  83,
+         44,  58,  70,  78,  93, 109, 108,  91,
+         65,  83,  86,  88, 101,  90,  93,  89,
+    },
+    { /* sel 3 */
+         11,   7,   7,  11,  17,  28,  36,  43,
+          8,   8,  10,  13,  18,  41,  43,  39,
+         10,   9,  11,  17,  28,  40,  49,  40,
+         10,  12,  15,  20,  36,  62,  57,  44,
+         12,  15,  26,  40,  48,  78,  74,  55,
+         17,  25,  39,  46,  58,  74,  81,  66,
+         35,  46,  56,  62,  74,  86,  86,  72,
+         51,  66,  68,  70,  80,  71,  74,  71,
+    },
+    { /* sel 4 */
+          9,   6,   5,   9,  13,  22,  28,  34,
+          6,   6,   7,  10,  14,  32,  33,  30,
+          7,   7,   9,  13,  22,  32,  38,  31,
+          7,   9,  12,  16,  28,  48,  45,  34,
+         10,  12,  20,  31,  38,  61,  57,  43,
+         13,  19,  30,  36,  45,  58,  63,  51,
+         27,  36,  43,  48,  57,  68,  67,  56,
+         40,  51,  53,  55,  63,  56,  57,  55,
+    },
+    { /* sel 5 */
+          6,   4,   3,   6,   9,  15,  19,  22,
+          4,   4,   5,   7,   9,  21,  22,  20,
+          5,   4,   6,   9,  15,  21,  25,  21,
+          5,   6,   8,  10,  19,  32,  30,  23,
+          6,   8,  13,  21,  25,  40,  38,  28,
+          9,  13,  20,  24,  30,  39,  42,  34,
+         18,  24,  29,  32,  38,  45,  45,  37,
+         27,  34,  35,  36,  42,  37,  38,  37,
+    },
+    { /* sel 6 */
+          3,   2,   1,   3,   4,   7,   9,  11,
+          2,   2,   2,   3,   4,  10,  11,  10,
+          2,   2,   3,   4,   7,  10,  12,  10,
+          2,   3,   4,   5,   9,  16,  15,  11,
+          3,   4,   6,  10,  12,  20,  19,  14,
+          4,   6,  10,  12,  15,  19,  21,  17,
+          9,  12,  14,  16,  19,  22,  22,  18,
+         13,  17,  17,  18,  21,  18,  19,  18,
+    },
+    { /* sel 7 */
+          2,   1,   1,   2,   3,   5,   6,   7,
+          1,   1,   1,   2,   3,   7,   7,   6,
+          1,   1,   2,   3,   5,   7,   8,   7,
+          1,   2,   2,   3,   6,  10,  10,   7,
+          2,   2,   4,   7,   8,  13,  12,   9,
+          3,   4,   6,   8,  10,  13,  14,  11,
+          6,   8,   9,  10,  12,  15,  15,  12,
+          9,  11,  11,  12,  14,  12,  12,  12,
+    },
 };
-static const uint8_t jpeg_std_quant_chroma[64] = {
-    17, 18, 24, 47, 99, 99, 99, 99,
-    18, 21, 26, 66, 99, 99, 99, 99,
-    24, 26, 56, 99, 99, 99, 99, 99,
-    47, 66, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
+static const uint8_t ast2050_quant_chroma[8][64] = {
+    { /* sel 0 */
+         31,  33,  45,  88, 185, 185, 185, 185,
+         33,  39,  48, 123, 184, 185, 185, 185,
+         45,  48, 105, 166, 185, 185, 185, 185,
+         88, 123, 166, 185, 185, 185, 185, 185,
+        185, 184, 185, 185, 185, 185, 185, 185,
+        185, 185, 185, 185, 185, 185, 185, 185,
+        185, 185, 185, 185, 185, 185, 185, 185,
+        185, 185, 185, 185, 185, 185, 185, 185,
+    },
+    { /* sel 1 */
+         27,  29,  39,  76, 160, 160, 160, 160,
+         29,  34,  42, 107, 160, 160, 160, 160,
+         39,  42,  91, 160, 160, 160, 160, 160,
+         76, 107, 160, 160, 160, 160, 160, 160,
+        160, 160, 160, 160, 160, 160, 160, 160,
+        160, 160, 160, 160, 160, 160, 160, 160,
+        160, 160, 160, 160, 160, 160, 160, 160,
+        160, 160, 160, 160, 160, 160, 160, 160,
+    },
+    { /* sel 2 */
+         22,  24,  32,  63, 133, 133, 133, 133,
+         24,  28,  34,  88, 133, 133, 133, 133,
+         32,  34,  75, 133, 133, 133, 133, 133,
+         63,  88, 133, 133, 133, 133, 133, 133,
+        133, 133, 133, 133, 133, 133, 133, 133,
+        133, 133, 133, 133, 133, 133, 133, 133,
+        133, 133, 133, 133, 133, 133, 133, 133,
+        133, 133, 133, 133, 133, 133, 133, 133,
+    },
+    { /* sel 3 */
+         18,  19,  26,  51, 108, 108, 108, 108,
+         19,  22,  28,  72, 108, 108, 108, 108,
+         26,  28,  61, 108, 108, 108, 108, 108,
+         51,  72, 108, 108, 108, 108, 108, 108,
+        108, 108, 108, 108, 108, 108, 108, 108,
+        108, 108, 108, 108, 108, 108, 108, 108,
+        108, 108, 108, 108, 108, 108, 108, 108,
+        108, 108, 108, 108, 108, 108, 108, 108,
+    },
+    { /* sel 4 */
+         13,  14,  19,  38,  80,  80,  80,  80,
+         14,  17,  21,  53,  80,  80,  80,  80,
+         19,  21,  45,  80,  80,  80,  80,  80,
+         38,  53,  80,  80,  80,  80,  80,  80,
+         80,  80,  80,  80,  80,  80,  80,  80,
+         80,  80,  80,  80,  80,  80,  80,  80,
+         80,  80,  80,  80,  80,  80,  80,  80,
+         80,  80,  80,  80,  80,  80,  80,  80,
+    },
+    { /* sel 5 */
+          9,  10,  13,  26,  55,  55,  55,  55,
+         10,  11,  14,  37,  55,  55,  55,  55,
+         13,  14,  31,  55,  55,  55,  55,  55,
+         26,  37,  55,  55,  55,  55,  55,  55,
+         55,  55,  55,  55,  55,  55,  55,  55,
+         55,  55,  55,  55,  55,  55,  55,  55,
+         55,  55,  55,  55,  55,  55,  55,  55,
+         55,  55,  55,  55,  55,  55,  55,  55,
+    },
+    { /* sel 6 */
+          4,   5,   6,  13,  27,  27,  27,  27,
+          5,   5,   7,  18,  27,  27,  27,  27,
+          6,   7,  15,  27,  27,  27,  27,  27,
+         13,  18,  27,  27,  27,  27,  27,  27,
+         27,  27,  27,  27,  27,  27,  27,  27,
+         27,  27,  27,  27,  27,  27,  27,  27,
+         27,  27,  27,  27,  27,  27,  27,  27,
+         27,  27,  27,  27,  27,  27,  27,  27,
+    },
+    { /* sel 7 */
+          3,   3,   4,   8,  18,  18,  18,  18,
+          3,   3,   4,  12,  18,  18,  18,  18,
+          4,   4,  10,  18,  18,  18,  18,  18,
+          8,  12,  18,  18,  18,  18,  18,  18,
+         18,  18,  18,  18,  18,  18,  18,  18,
+         18,  18,  18,  18,  18,  18,  18,  18,
+         18,  18,  18,  18,  18,  18,  18,  18,
+         18,  18,  18,  18,  18,  18,  18,  18,
+    },
 };
 
 /* Annex K.3 typical Huffman tables: 16 BITS counts then values. */
@@ -319,20 +480,6 @@ static void jpeg_flush_bits(JpegBuf *b)
     }
 }
 
-/* Scale an Annex K table by the VR060 quality index (IJG formula). */
-static void jpeg_scale_quant(uint8_t out[64], const uint8_t base[64],
-                             unsigned q_index)
-{
-    /* VR060 selects one of 12 quality levels; map 0..11 -> IJG 25..91. */
-    unsigned quality = 25 + q_index * 6;
-    unsigned scale = quality < 50 ? 5000 / quality : 200 - 2 * quality;
-
-    for (int i = 0; i < 64; i++) {
-        unsigned v = (base[i] * scale + 50) / 100;
-        out[i] = MIN(MAX(v, 1u), 255u);
-    }
-}
-
 /* Reference double-precision 8x8 forward DCT (ITU-T T.81 A.3.3). */
 static void jpeg_fdct(const int16_t in[64], double out[64])
 {
@@ -434,11 +581,11 @@ static JpegBuf jpeg_encode_frame(const uint8_t *rgb, unsigned width,
                                  unsigned height, unsigned q_index)
 {
     JpegBuf b = { 0 };
-    uint8_t qluma[64], qchroma[64];
+    unsigned sel = MIN(q_index, 7u);        /* G3 has 8 ROM quant tables */
+    const uint8_t *qluma = ast2050_quant_luma[sel];
+    const uint8_t *qchroma = ast2050_quant_chroma[sel];
     HuffTable dc_l, ac_l, dc_c, ac_c;
 
-    jpeg_scale_quant(qluma, jpeg_std_quant_luma, q_index);
-    jpeg_scale_quant(qchroma, jpeg_std_quant_chroma, q_index);
     jpeg_build_huff(&dc_l, jpeg_dc_luma_bits, jpeg_dc_luma_vals, 12);
     jpeg_build_huff(&ac_l, jpeg_ac_luma_bits, jpeg_ac_luma_vals, 162);
     jpeg_build_huff(&dc_c, jpeg_dc_chroma_bits, jpeg_dc_chroma_vals, 12);
@@ -503,6 +650,14 @@ static JpegBuf jpeg_encode_frame(const uint8_t *rgb, unsigned width,
     jpeg_put_bytes(&b, (const uint8_t[]){ 3, 0x11 }, 2);
     jpeg_put_bytes(&b, (const uint8_t[]){ 0, 63, 0 }, 3);
 
+    /*
+     * The entropy-coded segment starts here. The real G3 writes only this to
+     * the stream buffer (register 0x040 is the CRC buffer, not a JPEG-header
+     * buffer, so no JFIF header is DMA-prepended) -- record its span so
+     * do_frame() can emit just the entropy in pure-JPEG mode, matching silicon.
+     */
+    b.body_off = b.len;
+
     /* Entropy-coded data: interleaved Y/Cb/Cr 8x8 blocks per MCU. */
     int dcy = 0, dcb = 0, dcr = 0;
     for (unsigned my = 0; my < height; my += 8) {
@@ -529,6 +684,7 @@ static JpegBuf jpeg_encode_frame(const uint8_t *rgb, unsigned width,
         }
     }
     jpeg_flush_bits(&b);
+    b.body_len = b.len - b.body_off;    /* entropy length, before EOI */
     jpeg_put_marker(&b, 0xD9);  /* EOI */
     return b;
 }
@@ -634,10 +790,25 @@ static void aspeed_video_ast2050_do_frame(void *opaque)
         return;
     }
 
-    unsigned q_index = (s->regs[R(VR_COMP_CTRL)] >> COMP_CTRL_DCT_LUM_SHIFT) & 0xF;
-    JpegBuf jpeg = jpeg_encode_frame(rgb, width, height, MIN(q_index, 11u));
+    uint32_t comp_ctrl = s->regs[R(VR_COMP_CTRL)];
+    unsigned q_index = (comp_ctrl >> COMP_CTRL_DCT_LUM_SHIFT) & 0xF;
+    JpegBuf jpeg = jpeg_encode_frame(rgb, width, height, q_index);
 
+    /*
+     * Pure-JPEG mode (VR060[0], as the AST2050 aspeed-video driver sets): the
+     * G3 writes ONLY the entropy-coded stream to the buffer -- no JFIF header,
+     * no EOI -- because register 0x040 is the CRC buffer, not a header buffer.
+     * The driver reconstructs the JFIF header in software. Emit exactly that
+     * headerless stream so QEMU matches silicon. Without the bit (an ast2400-
+     * style driver), emit the whole self-contained JFIF as before.
+     */
+    const uint8_t *out = jpeg.data;
     size_t out_len = jpeg.len;
+    if (comp_ctrl & COMP_CTRL_JPEG_ONLY) {
+        out = jpeg.data + jpeg.body_off;
+        out_len = jpeg.body_len;
+    }
+
     if (out_len > comp_max) {
         /* Real engine behaviour: an undersized stream buffer yields a
          * truncated (incomplete) JPEG. */
@@ -650,7 +821,7 @@ static void aspeed_video_ast2050_do_frame(void *opaque)
     if (out_len > dram_size - comp_off) {
         out_len = dram_size - comp_off;
     }
-    res = dma_memory_write(&s->dram_as, comp_off, jpeg.data, out_len,
+    res = dma_memory_write(&s->dram_as, comp_off, out, out_len,
                            MEMTXATTRS_UNSPECIFIED);
     g_free(jpeg.data);
     if (res != MEMTX_OK) {
