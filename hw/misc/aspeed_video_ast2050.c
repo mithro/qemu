@@ -172,8 +172,9 @@ static const uint8_t jpeg_zigzag[64] = {
  * generic Annex-K tables scaled by quality -- so the headerless entropy the G3
  * emits is decoded by exactly these tables. The driver's software JFIF header
  * carries the very same tables, so QEMU's stream + the driver's header compose
- * into a standards-compliant JPEG, matching real silicon.
- * Regenerate with tools: tmp/vga-fix/gen-quant-tables.py.
+ * into a standards-compliant JPEG, matching real silicon. To regenerate, parse
+ * the two DQT (0xFFDB) segments in each aspeed_video_jpeg_dct[0..7] entry and
+ * un-zigzag the 64 coefficients to raster order.
  */
 static const uint8_t ast2050_quant_luma[8][64] = {
     { /* sel 0 */
