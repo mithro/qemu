@@ -548,6 +548,14 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
             return;
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->udc_g3), 0, 0x1E6A0000);
+        /*
+         * VIC INT#5 (datasheet Sec 10 p.99; DTS interrupts = <5>). Needed so the
+         * model's fatal "USB command bus dead-lock" (ISR[18]) reaches the CPU --
+         * the G3 vhub hazard the mainline driver livelocks on and kernel patch
+         * 0007 fixes. Without this the deadlock IRQ would go nowhere.
+         */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->udc_g3), 0,
+                           qdev_get_gpio_in(DEVICE(&a->vic), 5));
     }
 
     /* Timer */
