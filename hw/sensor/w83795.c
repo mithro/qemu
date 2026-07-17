@@ -147,44 +147,52 @@ static void w83795_load_defaults(W83795State *s)
      * has_in from volt_ctrl 0xff/0xf7 covers in0..in10, in12..in15; the temp
      * control adds in16.  in11 (0x1B) is intentionally left unpopulated.
      */
-    w83795_set_volt(s, 0x10, 1000, 2);   /* in0  VCORE CPU0  ~1.00 V */
-    w83795_set_volt(s, 0x11, 1000, 2);   /* in1  VCORE CPU1  ~1.00 V */
-    w83795_set_volt(s, 0x12, 1500, 2);   /* in2  VDIMM       ~1.50 V */
-    w83795_set_volt(s, 0x13, 1100, 2);   /* in3  VTT/rail    ~1.10 V */
-    w83795_set_volt(s, 0x14, 1800, 2);   /* in4              ~1.80 V */
-    w83795_set_volt(s, 0x15, 1200, 2);   /* in5              ~1.20 V */
-    w83795_set_volt(s, 0x16, 1050, 2);   /* in6              ~1.05 V */
-    w83795_set_volt(s, 0x17, 1500, 2);   /* in7              ~1.50 V */
-    w83795_set_volt(s, 0x18,  900, 2);   /* in8              ~0.90 V */
-    w83795_set_volt(s, 0x19, 1250, 2);   /* in9              ~1.25 V */
-    w83795_set_volt(s, 0x1A, 1350, 2);   /* in10             ~1.35 V */
-    /* 0x1B (in11) unpopulated */
-    w83795_set_volt(s, 0x1C, 3300, 6);   /* in12 3VDD  (3.3 V, 6 mV/bit) */
-    w83795_set_volt(s, 0x1D, 3300, 6);   /* in13 3VSB  (3.3 V, 6 mV/bit) */
-    w83795_set_volt(s, 0x1E, 3040, 6);   /* in14 VBAT  (~3.0 V, 6 mV/bit) */
-    w83795_set_volt(s, 0x1F, 1520, 2);   /* in15             ~1.52 V */
-    w83795_set_volt(s, 0x20, 1620, 2);   /* in16             ~1.62 V */
+    /*
+     * Values below are the SILICON capture of this exact board's W83795G
+     * (asus-kgpe-d16-firmware/hardware-inventory/sensors.txt, host-side
+     * lm-sensors read of w83795g-i2c-14-2f; corroborated by
+     * evidence/real-hw-hwpass/host-w83795-sensors.txt) — not invented
+     * "plausible" numbers. Notables faithfully kept: in1/in3/in5 rails read
+     * (near) zero on this board, only fan1 spins, DTS die temps idle cold.
+     */
+    w83795_set_volt(s, 0x10, 1140, 2);   /* in0  VCORE CPU0  1.14 V */
+    w83795_set_volt(s, 0x11,    0, 2);   /* in1  VCORE CPU1  0.00 V (ALARM) */
+    w83795_set_volt(s, 0x12, 1380, 2);   /* in2              1.38 V */
+    w83795_set_volt(s, 0x13,   18, 2);   /* in3              18 mV (ALARM) */
+    w83795_set_volt(s, 0x14, 1190, 2);   /* in4              1.19 V */
+    w83795_set_volt(s, 0x15,    0, 2);   /* in5              0.00 V (ALARM) */
+    w83795_set_volt(s, 0x16, 1210, 2);   /* in6              1.21 V */
+    w83795_set_volt(s, 0x17, 1820, 2);   /* in7              1.82 V */
+    w83795_set_volt(s, 0x18, 1220, 2);   /* in8              1.22 V */
+    w83795_set_volt(s, 0x19, 1110, 2);   /* in9              1.11 V */
+    w83795_set_volt(s, 0x1A, 1590, 2);   /* in10             1.59 V */
+    /* 0x1B (in11) unpopulated in volt_ctrl (host reads 682 mV via PIIX4) */
+    w83795_set_volt(s, 0x1C, 3310, 6);   /* in12 3VDD   3.31 V (6 mV/bit) */
+    w83795_set_volt(s, 0x1D, 3280, 6);   /* in13 3VSB   3.28 V (6 mV/bit) */
+    w83795_set_volt(s, 0x1E, 2790, 6);   /* in14 VBAT   2.79 V (6 mV/bit) */
+    w83795_set_volt(s, 0x1F, 1010, 2);   /* in15             1.01 V */
+    w83795_set_volt(s, 0x20, 1590, 2);   /* in16             1.59 V */
 
-    /* CPU thermal diode (temp0, reg 0x21 == W83795_REG_TEMP[0][TEMP_READ]) */
-    w83795_set_temp(s, 0x21, 42250);     /* 42.25 degC */
+    /* CPU thermal diode (temp0, reg 0x21): silicon reads 50.5-59.0 degC */
+    w83795_set_temp(s, 0x21, 50500);     /* 50.5 degC */
 
-    /* DTS die temps (AMD SB-TSI), per socket */
-    w83795_set_temp(s, 0x26, 45000);     /* dts0  CPU0 die 45 degC */
-    w83795_set_temp(s, 0x27, 47000);     /* dts1  CPU1 die 47 degC */
+    /* DTS die temps (AMD SB-TSI), per socket: idle-cold on silicon */
+    w83795_set_temp(s, 0x26, 7250);      /* dts0  CPU0 die  7.25 degC */
+    w83795_set_temp(s, 0x27, 0);         /* dts1  CPU1 die  0.0 degC */
 
-    /* Fan tach (fan0..fan7 == fan1..fan8): a populated 6-fan chassis */
-    w83795_set_fan(s, 0x2E, 4950);       /* fan1 */
-    w83795_set_fan(s, 0x2F, 5100);       /* fan2 */
-    w83795_set_fan(s, 0x30, 4800);       /* fan3 */
-    w83795_set_fan(s, 0x31, 3600);       /* fan4 */
-    w83795_set_fan(s, 0x32, 3750);       /* fan5 */
-    w83795_set_fan(s, 0x33, 3900);       /* fan6 */
-    w83795_set_fan(s, 0x34, 0);          /* fan7 unpopulated */
-    w83795_set_fan(s, 0x35, 0);          /* fan8 unpopulated */
+    /* Fan tach (fan0..fan7 == fan1..fan8): ONLY fan1 spins on the rig */
+    w83795_set_fan(s, 0x2E, 2641);       /* fan1 (silicon: 2636-2641 RPM) */
+    w83795_set_fan(s, 0x2F, 0);          /* fan2 0 RPM (ALARM on silicon) */
+    w83795_set_fan(s, 0x30, 0);          /* fan3 0 RPM */
+    w83795_set_fan(s, 0x31, 0);          /* fan4 0 RPM */
+    w83795_set_fan(s, 0x32, 0);          /* fan5 0 RPM */
+    w83795_set_fan(s, 0x33, 0);          /* fan6 0 RPM */
+    w83795_set_fan(s, 0x34, 0);          /* fan7 0 RPM */
+    w83795_set_fan(s, 0x35, 0);          /* fan8 0 RPM */
 
-    /* PWM output duty (bank 2, regs 0x10..0x17): 100% like coreboot default */
+    /* PWM output duty (bank 2, regs 0x10..0x17): silicon reads 38% (0x61) */
     for (int i = 0; i < 8; i++) {
-        s->regs[2][0x10 + i] = 0xff;
+        s->regs[2][0x10 + i] = 0x61;
     }
 }
 
