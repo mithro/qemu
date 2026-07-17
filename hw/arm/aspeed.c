@@ -72,28 +72,29 @@ struct AspeedMachineState {
         SCU_AST2400_HW_STRAP_BOOT_MODE(AST2400_SPI_BOOT))
 
 /*
- * ASUS KGPE-D16 BMC (AST2050): 128 MB DDR2, 24 MHz input clock, SPI boot.
- * Modelled on the palmetto straps with AST2050-appropriate DRAM size and the
- * AST2050's fixed 24 MHz reference clock.
+ * ASUS KGPE-D16 BMC (AST2050): the LITERAL SCU70 value measured on the real
+ * chip (JTAG ddr2-init.tcl "straps: SCU70=0x00819582" + in-Linux devmem,
+ * both 2026-07-18). The G3's SCU70 layout (datasheet §18, p217-218) differs
+ * from the AST2400's — do NOT rebuild this from SCU_AST2400_* helpers:
  *
- * VGA memory size = 8 MB, hardware-verified: the live SCU70[3:2] strap on the
- * real board is 00 — JTAG ddr2-init.tcl computes MCR04 = 0x585 | (SCU70[3:2]
- * << 2) and printed "MCR04 = 0x00000585" on the real chip (bits [5:4] = 00 =
- * 8 MB aperture; asus-kgpe-d16-firmware/JTAG-USAGE-GUIDE.md). The video-engine
- * model sizes its internal-VGA capture source from this strap.
+ *   [23]=1  LPC dedicated reset pin on B10 (matches schematic §11)
+ *   [19]=0  PLL bypass OFF ("test mode only" — never set this on silicon)
+ *   [16]=1  boot at full speed
+ *   [15]=1  PCI class code = VGA device
+ *   [13:12]=01  CPU:AHB = 2:1
+ *   [11:9]=010  H-PLL 200 MHz
+ *   [8:6]=110   MAC mode: RMII(MAC#1) AND RMII(MAC#2) — the NC-SI channel
+ *               to the two 82574L host NICs is strap-enabled (D07)
+ *   [5]=0   no VGA BIOS ROM (on-board application)
+ *   [3:2]=00    VGA memory 8 MB (video-engine model sizes its capture from
+ *               this; MCR04 = 0x585 on the real chip)
+ *   [1:0]=10    boot from SPI flash
+ *
+ * Faithfulness matters here: Linux's aspeed-g4 pinctrl evaluates HW_STRAP1
+ * bits with AST2400 semantics (e.g. ball A19's ACPI function on bit19==0),
+ * so only the real value reproduces the real chip's driver behaviour.
  */
-#define KGPE_D16_BMC_HW_STRAP1 (                                        \
-        SCU_AST2400_HW_STRAP_DRAM_SIZE(DRAM_SIZE_128MB) |               \
-        SCU_AST2400_HW_STRAP_DRAM_CONFIG(2) |                           \
-        SCU_AST2400_HW_STRAP_ACPI_DIS |                                 \
-        SCU_AST2400_HW_STRAP_SET_CLK_SOURCE(AST2400_CLK_24M_IN) |       \
-        SCU_HW_STRAP_VGA_CLASS_CODE |                                   \
-        SCU_HW_STRAP_LPC_RESET_PIN |                                    \
-        SCU_HW_STRAP_SPI_MODE(SCU_HW_STRAP_SPI_M_S_EN) |                \
-        SCU_AST2400_HW_STRAP_SET_CPU_AHB_RATIO(AST2400_CPU_AHB_RATIO_2_1) | \
-        SCU_HW_STRAP_SPI_WIDTH |                                        \
-        SCU_HW_STRAP_VGA_SIZE_SET(VGA_8M_DRAM) |                        \
-        SCU_AST2400_HW_STRAP_BOOT_MODE(AST2400_SPI_BOOT))
+#define KGPE_D16_BMC_HW_STRAP1 0x00819582
 
 /* TODO: Find the actual hardware value */
 #define SUPERMICROX11_BMC_HW_STRAP1 (                                   \
