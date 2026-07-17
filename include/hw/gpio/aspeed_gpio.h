@@ -104,6 +104,16 @@ struct AspeedGPIOState {
     bool kgpe_d16_host_on;      /* modeled host-power latch (GPIOH2 reflects it) */
     bool kgpe_d16_pwrseq_busy;  /* re-entrancy guard while driving GPIOH2 */
 
+    /*
+     * KGPE-D16 board-glue named outputs (only wired when kgpe_d16_pwrseq):
+     * "kgpe-host-on"  - the host-power latch level (SYS_PWRGD equivalent),
+     *                   consumed by the I2C mux fabric (QU9 gate).
+     * "kgpe-i2cs"[2]  - the AST_I2CS0/1 select nets (GPIOF4/F5 through their
+     *                   4.7k pull-ups: an undriven pin reads high).
+     */
+    qemu_irq kgpe_host_on_out;
+    qemu_irq kgpe_i2cs_out[2];
+
     /* Parallel GPIO Registers */
     uint32_t debounce_regs[ASPEED_GPIO_NR_DEBOUNCE_REGS];
     struct GPIOSets {

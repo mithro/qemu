@@ -17,6 +17,7 @@
 #include "hw/arm/aspeed_eeprom.h"
 #include "hw/block/flash.h"
 #include "hw/i2c/i2c_mux_pca954x.h"
+#include "hw/i2c/kgpe_d16_i2c_fabric.h"
 #include "hw/i2c/smbus_eeprom.h"
 #include "hw/gpio/pca9552.h"
 #include "hw/nvram/eeprom_at24c.h"
@@ -548,6 +549,8 @@ static void palmetto_bmc_i2c_init(AspeedMachineState *bmc)
     object_property_set_int(OBJECT(dev), "temperature3", 110000, &error_abort);
 }
 
+static void kgpe_d16_bmc_i2c_fabric_init(AspeedMachineState *bmc);
+
 static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
 {
     AspeedSoCState *soc = bmc->soc;
@@ -573,6 +576,71 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
      * The AST2050's own PWM/tach block is unused on this board.
      */
     i2c_slave_create_simple(aspeed_i2c_get_bus(&soc->i2c, 1), "w83795", 0x2f);
+
+    kgpe_d16_bmc_i2c_fabric_init(bmc);
+}
+
+/*
+ * DDR3 SPD image for the DIMM in slot A2 (the one slot known populated on
+ * the test rig): 4 GB DDR3-1333 ECC RDIMM, dual-rank x8, thermal sensor
+ * present, CRC-16 valid over bytes 0-116 (0x5349 at 126/127).
+ *
+ * PROVISIONAL content: a generic well-formed image, to be replaced with the
+ * rig DIMM's real SPD dump once it has been read over the fabric on silicon
+ * (faithfulness rule: QEMU models the real hardware).
+ */
+static const uint8_t kgpe_d16_dimm_a2_spd[256] = {
+    0x92, 0x11, 0x0b, 0x01, 0x03, 0x11, 0x00, 0x09, 0x0b, 0x11, 0x01, 0x08,
+    0x0c, 0x00, 0x3c, 0x00, 0x6c, 0x78, 0x6c, 0x30, 0x6c, 0x11, 0x20, 0x8c,
+    0x00, 0x05, 0x3c, 0x3c, 0x00, 0xf0, 0x83, 0x05, 0x80, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0xb3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xce, 0x00,
+    0x00, 0x00, 0xaa, 0xbb, 0xcc, 0x01, 0x49, 0x53, 0x4b, 0x47, 0x50, 0x45,
+    0x2d, 0x44, 0x31, 0x36, 0x2d, 0x51, 0x45, 0x4d, 0x55, 0x2d, 0x34, 0x47,
+    0x42, 0x20, 0x00, 0x00, 0x26, 0x29,
+};
+
+/*
+ * The QU9/QU5/U23 I2C mux fabric between the BMC's I2C2 engine and the DIMM
+ * SPD/TSOD buses, plus the devices behind it. Reachable only while the
+ * modeled host power is on (QU9's enable is inverted SYS_PWRGD); the QU5
+ * select lines are GPIOF4/F5 through the board pull-ups. See
+ * asus-kgpe-d16-firmware/schematic-wiring/I2C-MUX-FABRIC-ARBITRATION.md and
+ * hw/i2c/kgpe_d16_i2c_fabric.c.
+ */
+static void kgpe_d16_bmc_i2c_fabric_init(AspeedMachineState *bmc)
+{
+    AspeedSoCState *soc = bmc->soc;
+    DeviceState *gpio = DEVICE(&soc->gpio);
+    DeviceState *fabric;
+    I2CBus *dimm_ad;
+    uint8_t *spd;
+
+    fabric = DEVICE(i2c_slave_create_simple(aspeed_i2c_get_bus(&soc->i2c, 1),
+                                            TYPE_KGPE_D16_I2C_FABRIC, 0));
+
+    qdev_connect_gpio_out_named(gpio, "kgpe-host-on", 0,
+                                qdev_get_gpio_in_named(fabric,
+                                                       "sys-pwrgd", 0));
+    qdev_connect_gpio_out_named(gpio, "kgpe-i2cs", 0,
+                                qdev_get_gpio_in_named(fabric, "select", 0));
+    qdev_connect_gpio_out_named(gpio, "kgpe-i2cs", 1,
+                                qdev_get_gpio_in_named(fabric, "select", 1));
+
+    /*
+     * Rig-faithful DIMM population: slot A2 only (bank Y2 = I2C10), SPD at
+     * 0x51 and its TSOD at 0x19 per the SA-strap map in
+     * I2C-MUX-FABRIC-ARBITRATION.md §5b.
+     */
+    dimm_ad = kgpe_d16_i2c_fabric_get_bus(fabric, KGPE_D16_FABRIC_Y2_DIMM_AD);
+    spd = g_memdup2(kgpe_d16_dimm_a2_spd, sizeof(kgpe_d16_dimm_a2_spd));
+    smbus_eeprom_init_one(dimm_ad, 0x51, spd);
+    i2c_slave_create_simple(dimm_ad, "jc42", 0x19);
 }
 
 static void quanta_q71l_bmc_i2c_init(AspeedMachineState *bmc)

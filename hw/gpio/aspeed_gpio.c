@@ -35,6 +35,10 @@
 #define KGPE_D16_B6_BIT 14
 #define KGPE_D16_H2_SET 1   /* GPIOH2 STA_LINE_POWER      (power-state input) */
 #define KGPE_D16_H2_BIT 26
+#define KGPE_D16_F4_SET 1   /* GPIOF4 AST_I2CS0 (ball W4, QU5 mux select S0) */
+#define KGPE_D16_F4_BIT 12
+#define KGPE_D16_F5_SET 1   /* GPIOF5 AST_I2CS1 (ball W3, QU5 mux select S1) */
+#define KGPE_D16_F5_BIT 13
 
 #define GPIOS_PER_GROUP 8
 
@@ -476,6 +480,19 @@ static void aspeed_gpio_kgpe_d16_pwrseq(AspeedGPIOState *s)
     s->kgpe_d16_pwrseq_busy = true;
     aspeed_gpio_set_pin_level(s, KGPE_D16_H2_SET, KGPE_D16_H2_BIT, new_on);
     s->kgpe_d16_pwrseq_busy = false;
+
+    /*
+     * Board-glue outputs for the I2C mux fabric (see
+     * schematic-wiring/I2C-MUX-FABRIC-ARBITRATION.md): the host-power level
+     * (SYS_PWRGD, which gates QU9), and the AST_I2CS0/1 select nets. The
+     * select nets have 4.7k pull-ups (QR114/QR115), so they read high unless
+     * the BMC actively drives the pin low as an output.
+     */
+    qemu_set_irq(s->kgpe_host_on_out, new_on);
+    qemu_set_irq(s->kgpe_i2cs_out[0],
+                 !aspeed_gpio_out_low(s, KGPE_D16_F4_SET, KGPE_D16_F4_BIT));
+    qemu_set_irq(s->kgpe_i2cs_out[1],
+                 !aspeed_gpio_out_low(s, KGPE_D16_F5_SET, KGPE_D16_F5_BIT));
 }
 
 /*
@@ -1519,6 +1536,11 @@ static void aspeed_gpio_realize(DeviceState *dev, Error **errp)
                           TYPE_ASPEED_GPIO, agc->mem_size);
 
     sysbus_init_mmio(sbd, &s->iomem);
+
+    if (s->kgpe_d16_pwrseq) {
+        qdev_init_gpio_out_named(dev, &s->kgpe_host_on_out, "kgpe-host-on", 1);
+        qdev_init_gpio_out_named(dev, s->kgpe_i2cs_out, "kgpe-i2cs", 2);
+    }
 }
 
 static void aspeed_gpio_init(Object *obj)
