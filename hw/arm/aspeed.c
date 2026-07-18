@@ -593,6 +593,29 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
         smbus_eeprom_init_one(aspeed_i2c_get_bus(&soc->i2c, 4), a, fru);
     }
 
+    /*
+     * Two Nuvoton/Winbond W83601G SMBus GPIO expanders (U27 @0x18, U28 @0x19)
+     * on the same direct I2C5 engine (QEMU bus 4; schematic §10.2). The BMC
+     * drives DIMM{A..H}ERRLED by writing their CR01/CR09 output-data registers.
+     * Present + register-readable on silicon 2026-07-18 (evidence/d08-w83601g/);
+     * the Port-1 input latches read 0x0f (U27) / 0xb5 (U28) on this rig, seeded
+     * here so QEMU's i2cget matches the board. Register map / resets are the
+     * datasheet-faithful w83601g model (hw/gpio/w83601g.c).
+     */
+    {
+        static const struct { uint8_t addr, p1in; } w83601g[] = {
+            { 0x18, 0x0f },   /* U27, DIMM A-F error LEDs */
+            { 0x19, 0xb5 },   /* U28, DIMM G/H error LEDs */
+        };
+        for (size_t i = 0; i < ARRAY_SIZE(w83601g); i++) {
+            I2CSlave *s = i2c_slave_new("w83601g", w83601g[i].addr);
+
+            qdev_prop_set_uint8(DEVICE(s), "port1-input", w83601g[i].p1in);
+            i2c_slave_realize_and_unref(s, aspeed_i2c_get_bus(&soc->i2c, 4),
+                                        &error_abort);
+        }
+    }
+
     kgpe_d16_bmc_i2c_fabric_init(bmc);
 }
 
