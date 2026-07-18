@@ -949,7 +949,13 @@ static void aspeed_soc_ast2050_class_init(ObjectClass *oc, void *data)
     sc->sram_size    = 0x8000;
     sc->spis_num     = 1;
     sc->ehcis_num    = 1;
-    sc->wdts_num     = 2;
+    /*
+     * The AST2050 (G3) integrates ONE watchdog timer (datasheet: "AST2050 /
+     * AST1100 integrates one set of 32-bit programmable Watchdog Timer"), unlike
+     * the AST2400 (2) / AST2500 (3). Modeling a 2nd WDT at 0x1E785020 is a G4
+     * phantom. #144.
+     */
+    sc->wdts_num     = 1;
     sc->macs_num     = 2;
     sc->uarts_num    = 5;
     sc->uarts_base   = ASPEED_DEV_UART1;
