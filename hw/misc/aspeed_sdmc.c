@@ -782,12 +782,17 @@ static void aspeed_2050_sdmc_write(AspeedSDMCState *s, uint32_t reg, uint32_t da
 }
 
 /*
- * Datasheet caps total capacity at 256 MB (MCR04[3:2], p185/p201). The real
- * KGPE-D16 board is 64 MB. MCR04 is not synthesised from this list (there is no
- * compute_conf); it only bounds/validates the machine ram-size property.
+ * The AST2050's MAXIMUM memory capacity is 128 MB (datasheet §1.4 feature-
+ * comparison table p27: AST2100=256MB, AST2050=128MB, AST1100=128MB — the
+ * AST2050/AST1100 have a 16-bit SDRAM bus, only the 32-bit AST2100 reaches
+ * 256MB). The MCR04[3:2] size field (p185/p201) can *encode* 11=256M, but that
+ * is the field capability, not a config the 16-bit AST2050 can populate — so
+ * 256 MB is deliberately NOT offered here. The real KGPE-D16 board is 64 MB.
+ * MCR04 is not synthesised from this list (there is no compute_conf); it only
+ * bounds/validates the machine ram-size property.
  */
 static const uint64_t
-aspeed_2050_ram_sizes[] = { 64 * MiB, 128 * MiB, 256 * MiB, 0 };
+aspeed_2050_ram_sizes[] = { 64 * MiB, 128 * MiB, 0 };
 
 static void aspeed_2050_sdmc_class_init(ObjectClass *klass, void *data)
 {
@@ -797,7 +802,7 @@ static void aspeed_2050_sdmc_class_init(ObjectClass *klass, void *data)
     dc->desc = "ASPEED 2050 DDR2 SDRAM Memory Controller";
     device_class_set_legacy_reset(dc, aspeed_2050_sdmc_reset);
 
-    asc->max_ram_size = 256 * MiB;
+    asc->max_ram_size = 128 * MiB;  /* AST2050 chip max (§1.4 p27); NOT the 256M field-encoding */
     /* No compute_conf: MCR04 is firmware-written verbatim on the G3, not synthesised. */
     asc->compute_conf = NULL;
     asc->write = aspeed_2050_sdmc_write;
