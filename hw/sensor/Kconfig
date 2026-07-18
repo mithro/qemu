@@ -18,6 +18,11 @@ config JC42
     depends on I2C
     default y if I2C_DEVICES
 
+config SBTSI
+    bool
+    depends on I2C
+    default y if I2C_DEVICES
+
 config DPS310
     bool
     depends on I2C

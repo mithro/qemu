@@ -616,6 +616,27 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
         }
     }
 
+    /*
+     * AMD SB-TSI processor thermal sensors on the BMC's I2C4 engine (schematic
+     * §10.2: "AMD SB-TSI 0x4C/0x4D", reached through the QU4 level-shift FETs).
+     * QEMU bus index 3 = DT i2c3 = schematic I2C4. 0x4C = socket P0, 0x4D = P1.
+     * On real silicon these only answer when the host CPU(s) are powered; the
+     * model provides plausible CPU temperatures for the Linux sbtsi_temp driver.
+     */
+    {
+        static const struct { uint8_t addr; int temp_mC; } sbtsi[] = {
+            { 0x4c, 45500 },   /* P0 */
+            { 0x4d, 43000 },   /* P1 */
+        };
+        for (size_t i = 0; i < ARRAY_SIZE(sbtsi); i++) {
+            I2CSlave *s = i2c_slave_create_simple(
+                aspeed_i2c_get_bus(&soc->i2c, 3), "sbtsi", sbtsi[i].addr);
+
+            object_property_set_int(OBJECT(s), "temperature", sbtsi[i].temp_mC,
+                                    &error_abort);
+        }
+    }
+
     kgpe_d16_bmc_i2c_fabric_init(bmc);
 }
 
