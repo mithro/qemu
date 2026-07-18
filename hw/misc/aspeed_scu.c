@@ -712,11 +712,50 @@ static void aspeed_2050_scu_propagate_gates(AspeedSCUState *s)
     qemu_set_irq(s->g3_i2c_rst,      !!(s->regs[SYS_RST_CTRL]  & BIT(2)));
 }
 
+static uint64_t aspeed_ast2050_scu_read(void *opaque, hwaddr offset,
+                                        unsigned size)
+{
+    AspeedSCUState *s = ASPEED_SCU(opaque);
+    int reg = TO_REG(offset);
+
+    /*
+     * On the G3 (AST2050) SCU, offset 0x78 is NOT the RNG data register -- the
+     * G3 has no hardware RNG. It is "Multi-function Pin Control #2" (SCU78, A3
+     * datasheet V1.05 §15/§18: bit4 = disable PCI INTA# output, bit3 = enable
+     * WDT-reset-event output, bit2/bit0 = Video-Port-A mode; Init=0). Return the
+     * stored value instead of the shared handler's per-read random RNG_DATA, so
+     * a driver that reads SCU78 back to verify a pinmux write sees what it wrote.
+     */
+    if (reg == RNG_DATA) {
+        trace_aspeed_scu_read(offset, size, s->regs[reg]);
+        return s->regs[reg];
+    }
+
+    return aspeed_scu_read(opaque, offset, size);
+}
+
 static void aspeed_ast2050_scu_write(void *opaque, hwaddr offset,
                                      uint64_t data, unsigned size)
 {
     AspeedSCUState *s = ASPEED_SCU(opaque);
     int reg = TO_REG(offset);
+
+    /*
+     * SCU78 on the G3 is Multi-function Pin Control #2 (see the read path), a
+     * normal R/W register -- not the AST2400's read-only RNG_DATA. Store it here
+     * (and skip the shared write, which would drop it as read-only) so pinmux #2
+     * settings persist and read back correctly. Honor the SCU write-protect lock
+     * exactly like the shared write does for every other reg in this range: a
+     * write while PROT_KEY is clear (SCU locked) is dropped on real silicon.
+     */
+    if (reg == RNG_DATA) {
+        if (!s->regs[PROT_KEY]) {
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: SCU is locked!\n", __func__);
+            return;
+        }
+        s->regs[reg] = data;
+        return;
+    }
 
     aspeed_ast2400_scu_write(opaque, offset, data, size);
 
@@ -726,7 +765,7 @@ static void aspeed_ast2050_scu_write(void *opaque, hwaddr offset,
 }
 
 static const MemoryRegionOps aspeed_ast2050_scu_ops = {
-    .read = aspeed_scu_read,
+    .read = aspeed_ast2050_scu_read,
     .write = aspeed_ast2050_scu_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .impl = {
