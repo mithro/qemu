@@ -254,6 +254,9 @@ static uint8_t w83795_do_read(W83795State *s, uint8_t bank, uint8_t reg)
         }
     }
 
+    if (bank >= W83795_NUM_BANKS) {
+        return 0xff;    /* banks 4-7 are undefined (only 0-3 exist); no backing store */
+    }
     return s->regs[bank][reg];
 }
 
@@ -263,6 +266,9 @@ static void w83795_do_write(W83795State *s, uint8_t bank, uint8_t reg,
     if (reg == W83795_REG_BANKSEL) {
         s->bank = data;                             /* low 3 bits select bank */
         return;
+    }
+    if (bank >= W83795_NUM_BANKS) {
+        return;         /* banks 4-7 are undefined (only 0-3 exist); drop the write */
     }
     /* Everything else lands in the scratch store (limits, pwm, config). */
     s->regs[bank][reg] = data;
