@@ -1509,6 +1509,20 @@ static void aspeed_gpio_reset(DeviceState *dev)
 
     /* TODO: respect the reset tolerance registers */
     memset(s->sets, 0, sizeof(s->sets));
+
+    /*
+     * The KGPE-D16 host-power latch (kgpe_d16_host_on) is board-level glue
+     * (U8 + FETs), NOT part of the BMC GPIO controller's reset domain: a BMC
+     * reset does not change the host's power state. So do NOT clear it here —
+     * instead re-sync the GPIOH2 power-state input (just zeroed by the memset)
+     * and the board-glue outputs from the (persisted) latch, so a warm reset
+     * leaves the register and the latch consistent instead of momentarily
+     * reading "host off" until the next unrelated GPIO write. At cold boot the
+     * latch is still false (instance_init), so GPIOH2 correctly reads off.
+     */
+    if (s->kgpe_d16_pwrseq) {
+        aspeed_gpio_kgpe_d16_pwrseq(s);
+    }
 }
 
 static void aspeed_gpio_realize(DeviceState *dev, Error **errp)
@@ -1591,13 +1605,20 @@ static const VMStateDescription vmstate_gpio_regs = {
 
 static const VMStateDescription vmstate_aspeed_gpio = {
     .name = TYPE_ASPEED_GPIO,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_STRUCT_ARRAY(sets, AspeedGPIOState, ASPEED_GPIO_MAX_NR_SETS,
                              1, vmstate_gpio_regs, GPIOSets),
         VMSTATE_UINT32_ARRAY(debounce_regs, AspeedGPIOState,
                              ASPEED_GPIO_NR_DEBOUNCE_REGS),
+        /*
+         * The KGPE-D16 modeled host-power latch. Without it, a migrated/loaded
+         * "host on" state reverts to off on the destination and the next GPIO
+         * write clobbers the correctly-migrated GPIOH2 bit back to off. v1
+         * streams (no field) default it to false, which is the safe idle state.
+         */
+        VMSTATE_BOOL_V(kgpe_d16_host_on, AspeedGPIOState, 2),
         VMSTATE_END_OF_LIST(),
    }
 };
