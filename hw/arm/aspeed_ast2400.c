@@ -227,8 +227,18 @@ static void aspeed_ast2400_soc_init(Object *obj)
     snprintf(typename, sizeof(typename), "aspeed.timer-%s", socname);
     object_initialize_child(obj, "timerctrl", &s->timerctrl, typename);
 
-    snprintf(typename, sizeof(typename), "aspeed.adc-%s", socname);
-    object_initialize_child(obj, "adc", &s->adc, typename);
+    /*
+     * The AST2050 (G3) has NO ADC block: the ADC (0x1E6E9000) was introduced with
+     * the AST2400/G4 (datasheet §1.4 p27 feature comparison + §9 memory map — see
+     * qemu-model/AST2050-MEMORY-MAP.md, which records "ADC ... Absent ... introduced
+     * with the AST2400"). The shared AST2400 base creates it unconditionally; skip it
+     * on the G3 so the model does not present a peripheral the real silicon lacks (a
+     * guest access to 0x1E6E9000 then reads as unassigned, exactly like the hardware).
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        snprintf(typename, sizeof(typename), "aspeed.adc-%s", socname);
+        object_initialize_child(obj, "adc", &s->adc, typename);
+    }
 
     snprintf(typename, sizeof(typename), "aspeed.i2c-%s", socname);
     object_initialize_child(obj, "i2c", &s->i2c, typename);
@@ -571,13 +581,15 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->timerctrl), i, irq);
     }
 
-    /* ADC */
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->adc), errp)) {
-        return;
+    /* ADC -- absent on the G3 (AST2050); see the instance-init note above. */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->adc), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->adc), 0, sc->memmap[ASPEED_DEV_ADC]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->adc), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_ADC));
     }
-    aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->adc), 0, sc->memmap[ASPEED_DEV_ADC]);
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->adc), 0,
-                       aspeed_soc_get_irq(s, ASPEED_DEV_ADC));
 
     /* UART */
     if (!aspeed_soc_uart_realize(s, errp)) {
