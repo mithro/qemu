@@ -57,7 +57,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(W83601GState, W83601G)
 #define CR_ID_LOW           0x21
 
 #define W83601G_ID_HIGH     0x60
-#define W83601G_ID_LOW      0x12    /* §7.1 table (the §7.2 text says 0x13) */
+/*
+ * CR21 chip-ID low. The datasheet is self-inconsistent (§7.1 table says 0x12,
+ * §7.2 text says 0x13); this rig's silicon reads 0x13 (evidence/d08-w83601g/
+ * 03-silicon-both-sides.txt), so model the silicon truth per the "QEMU models
+ * real hardware" rule.
+ */
+#define W83601G_ID_LOW      0x13
 
 typedef struct W83601GState {
     SMBusDevice parent_obj;
