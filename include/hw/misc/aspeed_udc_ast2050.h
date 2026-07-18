@@ -44,6 +44,22 @@ struct AspeedUDCAST2050State {
     bool phy_ready;
     bool deadlocked;
 
+    /*
+     * "deadlock-model" property (default OFF). The bus-dead-lock hazard is REAL on
+     * silicon, but the only deterministic signal QEMU (no icount) has to tell the
+     * mainline driver (connects blind -> hangs on silicon) apart from a driver that
+     * is safe on silicon is "did it read CTRL[31] to poll". That proxy is WRONG for
+     * the Avocent/C410X vendor firmware, which is safe on real silicon yet does NOT
+     * poll CTRL[31] (traced 2026-07-18): it releases reset, sets up EPs and then
+     * connects, exactly like the *unpatched* mainline driver bar the poll's
+     * udelay() timing -- which QEMU cannot represent. So the model cannot latch the
+     * deadlock for the mainline driver without ALSO false-latching it for the
+     * vendor firmware (breaking the C4 legacy boot). Keep the hazard modelling
+     * available for the kernel-patch-0007 repro, but OFF by default so legacy
+     * firmware always boots (the primary faithfulness rule). See LOG.md 2026-07-18.
+     */
+    bool deadlock_model;
+
     uint32_t regs[ASPEED_UDC_AST2050_NR_REGS];
 };
 

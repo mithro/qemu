@@ -29,6 +29,7 @@
 #include "qemu/osdep.h"
 #include "hw/misc/aspeed_udc_ast2050.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -101,8 +102,15 @@ static void aspeed_udc_ast2050_write(void *opaque, hwaddr offset, uint64_t data,
         s->regs[reg] = data;
 
         if (data & CTRL_UPSTREAM_CONNECT) {
-            /* Connecting into a not-ready PHY latches the fatal deadlock. */
-            if (!s->phy_ready) {
+            /*
+             * Connecting into a not-ready PHY latches the fatal deadlock -- but
+             * only under the opt-in "deadlock-model" property. It is OFF by
+             * default because the model cannot tell the mainline driver (hangs on
+             * silicon) apart from the vendor firmware (safe on silicon) without
+             * false-latching both, and legacy firmware must always boot. See the
+             * struct comment in aspeed_udc_ast2050.h.
+             */
+            if (s->deadlock_model && !s->phy_ready) {
                 s->deadlocked = true;
                 s->regs[UDC_ISR / 4] |= ISR_CMD_DEADLOCK;
             }
@@ -176,6 +184,17 @@ static const VMStateDescription vmstate_aspeed_udc_ast2050 = {
     }
 };
 
+static const Property aspeed_udc_ast2050_props[] = {
+    /*
+     * OFF by default: the bus-dead-lock hazard is real on silicon but cannot be
+     * deterministically triggered for the mainline driver without also
+     * false-latching it for the (silicon-safe) vendor firmware. Enable it only in
+     * a dedicated kernel-patch-0007 regression scenario. See the header.
+     */
+    DEFINE_PROP_BOOL("deadlock-model", AspeedUDCAST2050State, deadlock_model,
+                     false),
+};
+
 static void aspeed_udc_ast2050_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -184,6 +203,7 @@ static void aspeed_udc_ast2050_class_init(ObjectClass *klass, void *data)
     device_class_set_legacy_reset(dc, aspeed_udc_ast2050_reset);
     dc->desc = "ASPEED AST2050 USB device/virtual-hub controller";
     dc->vmsd = &vmstate_aspeed_udc_ast2050;
+    device_class_set_props(dc, aspeed_udc_ast2050_props);
 }
 
 static const TypeInfo aspeed_udc_ast2050_info = {
