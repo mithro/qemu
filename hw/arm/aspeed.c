@@ -1409,7 +1409,18 @@ static void aspeed_machine_kgpe_d16_bmc_class_init(ObjectClass *oc, void *data)
     amc->fmc_model = "mx25l12805d";  /* 16 MB SPI NOR (fits the C4 vendor rootfs) */
     amc->spi_model = "mx25l12805d";
     amc->num_cs    = 1;
-    amc->macs_mask = ASPEED_MAC0_ON; /* single BMC NIC (FTGMAC100) */
+    /*
+     * BOTH MACs, matching the schematic (AST2050-BMC-WIRING.md §7): MAC0
+     * (0x1e660000) = RMII1 -> the dedicated RTL8201 management PHY (eth0);
+     * MAC1 (0x1e680000) = RMII2 -> the NC-SI sideband to the two Intel 82574L
+     * host NICs (LU1/LU2). SCU70[8:6]=110 ("RMII(MAC#1) and RMII(MAC#2)") is
+     * strap-enabled on the real board (measured SCU70=0x00819582), so MAC1 is
+     * genuinely wired. It is peered only when a second -nic is supplied (the
+     * NC-SI test), so single-NIC oracle boots (C2/C4) are unaffected: MAC1
+     * simply has no backend. NC-SI control frames are answered by the slirp
+     * backend's responder (D07). See device-driver-program/ D07.
+     */
+    amc->macs_mask = ASPEED_MAC0_ON | ASPEED_MAC1_ON;
     amc->i2c_init  = kgpe_d16_bmc_i2c_init; /* EEPROM@0x50 holds the BMC MAC */
     /*
      * 64 MB DDR2 — the real KGPE-D16 BMC size, hardware-verified 2026-07-08
