@@ -578,6 +578,21 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
      */
     i2c_slave_create_simple(aspeed_i2c_get_bus(&soc->i2c, 1), "w83795", 0x2f);
 
+    /*
+     * Board FRU EEPROM (U25, Holtek HT24LC08, 1 Kbit) on the BMC's direct I2C5
+     * engine (QEMU i2c bus 4; schematic §10.2, balls A13/B13). The 24c08 spans
+     * four I2C addresses (0x54-0x57, E2 strapped high — netlist-confirmed), one
+     * 256-byte block each. Read on silicon 2026-07-18: the device is present
+     * and at24-bindable but BLANK (all 0xff), so model it blank to match
+     * (evidence/d08-fru/). ASUS shipped it unprogrammed.
+     */
+    for (int a = 0x54; a <= 0x57; a++) {
+        uint8_t *fru = g_malloc(256);
+
+        memset(fru, 0xff, 256);
+        smbus_eeprom_init_one(aspeed_i2c_get_bus(&soc->i2c, 4), a, fru);
+    }
+
     kgpe_d16_bmc_i2c_fabric_init(bmc);
 }
 
