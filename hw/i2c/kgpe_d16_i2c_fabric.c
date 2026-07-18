@@ -188,7 +188,9 @@ static const VMStateDescription vmstate_kgpe_d16_i2c_fabric = {
 static const Property kgpe_d16_i2c_fabric_props[] = {
     DEFINE_PROP_BOOL("bmc-present-n", KgpeD16I2cFabricState,
                      bmc_present_n, false),
-    DEFINE_PROP_UINT8("sb-select", KgpeD16I2cFabricState, sb_select, 0),
+    /* Default to the 4.7k pull-up idle (S1:S0 = 11) like bmc_sel, not 0 — the
+     * select nets float high when neither owner actively drives them. */
+    DEFINE_PROP_UINT8("sb-select", KgpeD16I2cFabricState, sb_select, 3),
 };
 
 static void kgpe_d16_i2c_fabric_class_init(ObjectClass *klass, void *data)
