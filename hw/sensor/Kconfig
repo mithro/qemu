@@ -58,3 +58,7 @@ config ISL_PMBUS_VR
 config MAX31785
     bool
     depends on PMBUS
+
+config PMBUS_PSU
+    bool
+    depends on PMBUS

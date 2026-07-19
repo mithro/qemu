@@ -550,6 +550,7 @@ config ASPEED_SOC
     select LED
     select PMBUS
     select MAX31785
+    select PMBUS_PSU
     select FSI_APB2OPB_ASPEED
     select AT24C
 

@@ -579,6 +579,19 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
     i2c_slave_create_simple(aspeed_i2c_get_bus(&soc->i2c, 1), "w83795", 0x2f);
 
     /*
+     * Generic server PSU on the BMC's I2C1 engine (QEMU bus 0 = DT i2c0;
+     * schematic §10.2 / I2C-SMBUS-TOPOLOGY.md §3.1: connector PSUSMB1, balls
+     * A15/B15 = SDA1/SCL1, SMBALERT# on SALT1/B12). The schematic gives the PSU
+     * device address as "PSU-specific" (whatever supply is plugged in); 0x58 is
+     * the conventional server-PSU PMBus address, used here as the modeled
+     * default. Seeds nominal PMBus 1.2 telemetry (230 V in; 12 V / 8 A out;
+     * 30 C; 4000 RPM). PMBUS_REVISION (0x98) reads 0x22, CAPABILITY (0x19)
+     * 0x30. Modeled by hw/sensor/pmbus_psu.c.
+     */
+    i2c_slave_create_simple(aspeed_i2c_get_bus(&soc->i2c, 0), "pmbus-psu",
+                            0x58);
+
+    /*
      * Board FRU EEPROM (U25, Holtek HT24LC08, 1 Kbit) on the BMC's direct I2C5
      * engine (QEMU i2c bus 4; schematic §10.2, balls A13/B13). The 24c08 spans
      * four I2C addresses (0x54-0x57, E2 strapped high — netlist-confirmed), one
