@@ -592,7 +592,7 @@ static void kgpe_d16_bmc_i2c_init(AspeedMachineState *bmc)
                             0x58);
 
     /*
-     * Board FRU EEPROM (U25, Holtek HT24LC08, 1 Kbit) on the BMC's direct I2C5
+     * Board FRU EEPROM (U25, Holtek HT24LC08, 8 Kbit) on the BMC's direct I2C5
      * engine (QEMU i2c bus 4; schematic §10.2, balls A13/B13). The 24c08 spans
      * four I2C addresses (0x54-0x57, E2 strapped high — netlist-confirmed), one
      * 256-byte block each. Read on silicon 2026-07-18: the device is present
