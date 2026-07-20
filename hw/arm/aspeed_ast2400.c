@@ -325,9 +325,9 @@ static void aspeed_ast2400_soc_init(Object *obj)
 
     /*
      * The AST2050 (G3) has NO SDHCI/eMMC controller: SDHCI is a G4 block, and on
-     * the G3 its address 0x1E740000 is the MDMA engine and IRQ 26 is the RTC-alarm
-     * (memory-map §1d/§10). Skip it on the G3 so the model doesn't expose a phantom
-     * on the real MDMA address + RTC-alarm IRQ. See #172.
+     * the G3 its address 0x1E740000 is the MDMA engine (memory-map §1d/§10). Skip
+     * it on the G3 so the model doesn't expose a phantom on the real MDMA address.
+     * See #172. (The RTC alarm is VIC 22, not 26 — #192.)
      */
     if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
         snprintf(typename, sizeof(typename), "aspeed.sdhci-%s", socname);
@@ -542,15 +542,13 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->rtc_g3), 0,
                         sc->memmap[ASPEED_DEV_RTC]);
+        /*
+         * The G3 RTC has a SINGLE interrupt line = VIC source 22, and the alarm
+         * fires on it (silicon-proven, #192 — NOT a separate source 26 as was
+         * previously assumed). One IRQ (index 0) -> VIC 22.
+         */
         sysbus_connect_irq(SYS_BUS_DEVICE(&a->rtc_g3), 0,
                            aspeed_soc_get_irq(s, ASPEED_DEV_RTC));
-        /*
-         * The G3's RTC-alarm interrupt is VIC line 26 (distinct from the RTC IRQ
-         * 22; on the AST2400 line 26 is SDHCI, which the G3 lacks — see #172).
-         * Wire the model's alarm IRQ (index 1) straight to VIC input 26.  #187.
-         */
-        sysbus_connect_irq(SYS_BUS_DEVICE(&a->rtc_g3), 1,
-                           qdev_get_gpio_in(DEVICE(&a->vic), 26));
     } else {
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
             return;

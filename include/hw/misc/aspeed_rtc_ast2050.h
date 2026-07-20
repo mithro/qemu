@@ -37,8 +37,12 @@ struct AspeedRtcAST2050State {
 
     /*< public >*/
     MemoryRegion iomem;
-    qemu_irq irq;        /* RTC IRQ (VIC 22) */
-    qemu_irq alarm_irq;  /* RTC-alarm IRQ (VIC 26); §24 RTC04/RTC0C[1:4] */
+    /*
+     * The G3 RTC has a SINGLE interrupt line = VIC source 22 (silicon-proven,
+     * #192): the alarm (RTC04/RTC0C[1:4]) fires on it. There is NO separate
+     * source-26 alarm IRQ — that was an incorrect assumption.
+     */
+    qemu_irq irq;        /* RTC IRQ = alarm (VIC 22) */
 
     uint32_t regs[ASPEED_RTC_AST2050_NR_REGS];
 
@@ -49,7 +53,7 @@ struct AspeedRtcAST2050State {
      * latches the match edge the instant the counter reaches the alarm value,
      * regardless of what software is doing — each tick does a CATCH-UP SCAN of
      * every counter value crossed since the previous check (alarm_last_abs) and
-     * pulses alarm_irq on a rising match edge. This is robust to the timer firing
+     * pulses the RTC irq (VIC 22) on a rising match edge. This is robust to the timer firing
      * late (e.g. a tight guest poll loop starving the QEMU main loop): a sampling
      * model that only compared the single live counter value would skip the
      * one-tick-per-day match and never fire. alarm_matched is the edge-detect

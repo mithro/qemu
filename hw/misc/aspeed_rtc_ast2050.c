@@ -174,7 +174,7 @@ static void aspeed_rtc_ast2050_alarm_update(AspeedRtcAST2050State *s)
     } else {
         timer_del(s->alarm_timer);
         s->alarm_matched = false;
-        qemu_irq_lower(s->alarm_irq);
+        qemu_irq_lower(s->irq);
     }
 }
 
@@ -214,7 +214,7 @@ static void aspeed_rtc_ast2050_alarm_tick(void *opaque)
         prev = m;
     }
     if (rising) {
-        qemu_irq_pulse(s->alarm_irq);   /* rising edge -> VIC latches it */
+        qemu_irq_pulse(s->irq);   /* rising edge -> VIC latches it */
     }
     s->alarm_matched = prev;
     s->alarm_last_abs = cur_abs;
@@ -307,7 +307,7 @@ static void aspeed_rtc_ast2050_reset(DeviceState *dev)
     timer_del(s->alarm_timer);
     s->alarm_matched = false;
     s->alarm_last_abs = 0;
-    qemu_irq_lower(s->alarm_irq);
+    qemu_irq_lower(s->irq);
 }
 
 static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
@@ -318,8 +318,14 @@ static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->iomem, OBJECT(s), &aspeed_rtc_ast2050_ops, s,
                           TYPE_ASPEED_RTC_AST2050, 0x20);
     sysbus_init_mmio(sbd, &s->iomem);
-    sysbus_init_irq(sbd, &s->irq);         /* index 0: RTC IRQ (VIC 22) */
-    sysbus_init_irq(sbd, &s->alarm_irq);   /* index 1: RTC-alarm IRQ (VIC 26) */
+    /*
+     * The G3 RTC has a SINGLE interrupt line = VIC source 22 (silicon-proven,
+     * #192/evidence d14-zephyr/28): the alarm fires on VIC 22, NOT a separate
+     * source 26 as previously assumed. So there is one sysbus IRQ (index 0), and
+     * the alarm pulses it. (RTC0C has only alarm-enables [1:4], no periodic-
+     * interrupt-enable, so the RTC's sole interrupt is the alarm.)
+     */
+    sysbus_init_irq(sbd, &s->irq);         /* index 0: RTC IRQ = alarm (VIC 22) */
     s->alarm_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                   aspeed_rtc_ast2050_alarm_tick, s);
 }
