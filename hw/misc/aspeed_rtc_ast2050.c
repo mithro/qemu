@@ -3,18 +3,40 @@
  *
  * RTC00 counter (R: sec/min/hour/day), RTC08 reload, RTC0C control ([0] enable),
  * RTC10 restart (write 0x5A loads the counter from reload), RTC14 reset (write
- * 0x99 clears). This is a register-accurate model of the load/read path; the 1 Hz
- * CLK32K counter advance is a deferred behavioural add-on (as with the PWM tach
- * RPM). See qemu-model/peripherals/rtc.
+ * 0x99 clears).
+ *
+ * The counter now ADVANCES behaviourally (#158): while CONTROL[0] is set, the
+ * live count runs up from the loaded value at the RTC's real rate. The tick rate
+ * is the RTC input clock / 32768 (datasheet §24: the RTC divides its clock by
+ * 32768 for the 1 "second" tick; the fractional divider makes 12MHz*128/46875 =
+ * 32768.0 Hz => real 1 Hz). On the crystal-less KGPE-D16 the firmware selects the
+ * 24 MHz source (SCU08[16]=1; datasheet §2.19 "not necessary to include an
+ * external 32 KHz oscillator", §24 "clock source from 24MHz"), so the /32768
+ * stage yields 24e6/32768 = 732.42 "RTC seconds" per real second — the FAST rate
+ * measured on silicon (rtc_smoke set->get advanced ~732x; evidence
+ * d14-zephyr/14-rtc-silicon-pass.txt). clk_hz (default 24 MHz) is a device
+ * property so a future crystal-equipped board could set 32768 for true 1 Hz.
+ *
+ * COUNTER BIT LAYOUT — a KNOWN CONFLICT (tracked as #186): datasheet §24 RTC00
+ * defines FIELD-packed DayCnt[31:17]/HourCnt[16:12]/MinuCnt[11:6]/SecCnt[5:0],
+ * but the silicon-VALIDATED Zephyr rtc_aspeed_g3 driver uses BYTE-packed
+ * day[31:24]/hour[23:16]/min[15:8]/sec[7:0]. The one silicon set/get test cannot
+ * distinguish them (sec 30->52 never wraps past 60, and sec is bits[5:0] in
+ * both). This model advances BYTE-packed to match the firmware oracle — a
+ * field-packed re-encode would corrupt the driver's values even without a wrap,
+ * breaking the validated driver in QEMU. Resolving which layout the silicon
+ * actually carries into needs a minute-wrap test on real hardware (#186).
  *
  * This code is licensed under the GPL version 2 or later.
  */
 #include "qemu/osdep.h"
 #include "hw/misc/aspeed_rtc_ast2050.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qemu/timer.h"
 
 #define RTC_COUNTER 0x00
 #define RTC_RELOAD  0x08
@@ -24,6 +46,59 @@
 #define RESTART_MAGIC 0x5Au
 #define RESET_MAGIC   0x99u
 
+#define RTC_CTRL_ENABLE 0x1u        /* CONTROL[0] */
+#define RTC_TICK_DIV    32768u      /* datasheet §24: RTC input clock / 32768 */
+
+/* Byte-packed counter layout (matches the silicon-validated Zephyr driver; see
+ * the #186 note in the file header). Decode a packed value to absolute seconds. */
+static uint64_t rtc_unpack_seconds(uint32_t v)
+{
+    uint32_t sec  = (v >>  0) & 0xff;
+    uint32_t min  = (v >>  8) & 0xff;
+    uint32_t hour = (v >> 16) & 0xff;
+    uint32_t day  = (v >> 24) & 0xff;
+    return ((uint64_t)day * 86400u) + (hour * 3600u) + (min * 60u) + sec;
+}
+
+static uint32_t rtc_pack_seconds(uint64_t total)
+{
+    uint32_t sec  = total % 60; total /= 60;
+    uint32_t min  = total % 60; total /= 60;
+    uint32_t hour = total % 24; total /= 24;
+    uint32_t day  = total & 0xff;   /* byte-packed day field is 8-bit */
+    return (day << 24) | (hour << 16) | (min << 8) | sec;
+}
+
+/* The live counter value: the held value in regs[COUNTER] plus the elapsed
+ * "RTC seconds" since base_ns, but only while the RTC is enabled (CONTROL[0]).
+ * When disabled the counter holds its value (datasheet §24: "If the RTC is
+ * disabled, the {Sec,Minu,Hour}Cnt will hold the value"). */
+static uint32_t aspeed_rtc_ast2050_counter(AspeedRtcAST2050State *s)
+{
+    uint32_t base = s->regs[RTC_COUNTER >> 2];
+    int64_t elapsed_ns;
+    uint64_t ns_per_tick, ticks;
+
+    if (!(s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ENABLE) || s->clk_hz == 0) {
+        return base;
+    }
+    elapsed_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->base_ns;
+    if (elapsed_ns <= 0) {
+        return base;
+    }
+    /* ns per RTC tick = 32768 / clk_hz seconds. Divide (not multiply) to avoid
+     * overflow at long uptimes; 24 MHz => 1365333 ns/tick => 732.42 ticks/s. */
+    ns_per_tick = ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->clk_hz;
+    if (ns_per_tick == 0) {
+        return base;
+    }
+    ticks = (uint64_t)elapsed_ns / ns_per_tick;
+    if (ticks == 0) {
+        return base;
+    }
+    return rtc_pack_seconds(rtc_unpack_seconds(base) + ticks);
+}
+
 static uint64_t aspeed_rtc_ast2050_read(void *opaque, hwaddr offset, unsigned size)
 {
     AspeedRtcAST2050State *s = ASPEED_RTC_AST2050(opaque);
@@ -31,6 +106,9 @@ static uint64_t aspeed_rtc_ast2050_read(void *opaque, hwaddr offset, unsigned si
 
     if (reg >= ASPEED_RTC_AST2050_NR_REGS) {
         return 0;
+    }
+    if (offset == RTC_COUNTER) {
+        return aspeed_rtc_ast2050_counter(s);
     }
     return s->regs[reg];
 }
@@ -48,15 +126,32 @@ static void aspeed_rtc_ast2050_write(void *opaque, hwaddr offset, uint64_t data,
     case RTC_COUNTER:
         /* counter status is read-only */
         break;
+    case RTC_CONTROL: {
+        uint32_t old = s->regs[RTC_CONTROL >> 2];
+        if ((old ^ data) & RTC_CTRL_ENABLE) {
+            if (data & RTC_CTRL_ENABLE) {
+                /* enabling: start counting from the held value, now */
+                s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            } else {
+                /* disabling: freeze the advanced value into COUNTER */
+                s->regs[RTC_COUNTER >> 2] = aspeed_rtc_ast2050_counter(s);
+            }
+        }
+        s->regs[RTC_CONTROL >> 2] = data;
+        break;
+    }
     case RTC_RESTART:
-        /* magic 0x5A loads the counter from the reload register */
+        /* magic 0x5A loads the counter from the reload register and re-anchors
+         * the count so it advances up from the freshly loaded value */
         if (data == RESTART_MAGIC) {
             s->regs[RTC_COUNTER >> 2] = s->regs[RTC_RELOAD >> 2];
+            s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         }
         break;
     case RTC_RESET:
         if (data == RESET_MAGIC) {
             memset(s->regs, 0, sizeof(s->regs));
+            s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         }
         break;
     default:
@@ -78,6 +173,7 @@ static void aspeed_rtc_ast2050_reset(DeviceState *dev)
     AspeedRtcAST2050State *s = ASPEED_RTC_AST2050(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
+    s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 }
 
 static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
@@ -93,13 +189,20 @@ static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_aspeed_rtc_ast2050 = {
     .name = TYPE_ASPEED_RTC_AST2050,
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, AspeedRtcAST2050State,
                              ASPEED_RTC_AST2050_NR_REGS),
+        VMSTATE_INT64_V(base_ns, AspeedRtcAST2050State, 2),
         VMSTATE_END_OF_LIST()
     }
+};
+
+static const Property aspeed_rtc_ast2050_properties[] = {
+    /* RTC input-clock Hz; the /32768 tick divider makes the "second" rate.
+     * KGPE-D16 default: 24 MHz (SCU08[16]=1, no 32.768 kHz crystal) => 732.42x. */
+    DEFINE_PROP_UINT32("clk-hz", AspeedRtcAST2050State, clk_hz, 24000000),
 };
 
 static void aspeed_rtc_ast2050_class_init(ObjectClass *klass, void *data)
@@ -110,6 +213,7 @@ static void aspeed_rtc_ast2050_class_init(ObjectClass *klass, void *data)
     device_class_set_legacy_reset(dc, aspeed_rtc_ast2050_reset);
     dc->desc = "ASPEED AST2050 RTC (counter-style)";
     dc->vmsd = &vmstate_aspeed_rtc_ast2050;
+    device_class_set_props(dc, aspeed_rtc_ast2050_properties);
 }
 
 static const TypeInfo aspeed_rtc_ast2050_info = {
