@@ -470,14 +470,24 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    /* SRAM */
-    sram_name = g_strdup_printf("aspeed.sram.%d", CPU(&a->cpu[0])->cpu_index);
-    if (!memory_region_init_ram(&s->sram, OBJECT(s), sram_name, sc->sram_size,
-                                errp)) {
-        return;
+    /*
+     * SRAM (G4 only). The AST2050 (G3) has NO on-chip SRAM: 0x1E720000 on the
+     * G3 is the A2P (AHB->PCI) bridge, not SRAM (AST2050-MEMORY-MAP.md:55/99,
+     * §9 p97 — SRAM is a G4 block; #176). Skip the SRAM on the G3 so the model
+     * does not present a wrong device at the A2P address. Gated accesses fall
+     * back to the ASPEED_DEV_IOMEM unimplemented catch-all (0x1E600000 +
+     * 0x200000 covers 0x1E720000), so they still respond (no abort) — until a
+     * faithful A2P bridge is modelled there (matrix row 50 / #176).
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        sram_name = g_strdup_printf("aspeed.sram.%d", CPU(&a->cpu[0])->cpu_index);
+        if (!memory_region_init_ram(&s->sram, OBJECT(s), sram_name, sc->sram_size,
+                                    errp)) {
+            return;
+        }
+        memory_region_add_subregion(s->memory,
+                                    sc->memmap[ASPEED_DEV_SRAM], &s->sram);
     }
-    memory_region_add_subregion(s->memory,
-                                sc->memmap[ASPEED_DEV_SRAM], &s->sram);
 
     /* SCU */
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->scu), errp)) {
