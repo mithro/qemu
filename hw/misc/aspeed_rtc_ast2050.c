@@ -120,10 +120,17 @@ static uint64_t aspeed_rtc_ast2050_ns_per_tick(AspeedRtcAST2050State *s)
     return ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->clk_hz;
 }
 
-/* True when, for the given control + alarm registers, every ENABLED RTC04 field
- * (sec[1]/min[2]/hour[3]/day[4]) equals the byte-packed candidate counter value
- * `cnt`. Fields are compared BYTE-packed, consistent with the counter model (the
- * same datasheet-vs-driver layout question tracked as #186 applies to RTC04). */
+/* True when every ENABLED RTC04 field (sec[1]/min[2]/hour[3]) equals the
+ * corresponding field of the candidate counter value `cnt`.
+ *
+ * IMPORTANT: RTC04 is FIELD-packed (datasheet §24: hour[16:12]/min[11:6]/
+ * sec[5:0]), which was PROVEN on real silicon (2026-07-21, evidence
+ * d14-zephyr/28: a byte-packed alarm-hour write read back 0 and never matched).
+ * The COUNTER read path is byte-packed (sec[7:0]/min[15:8]/hour[23:16]), so we
+ * compare field VALUES: extract each field from RTC04 field-packed and from `cnt`
+ * byte-packed. This makes the model reproduce the silicon behaviour — a
+ * byte-packed alarm driver now FAILS to match here too, instead of passing.
+ * RTC04 has no day field (17 bits), so RTC_CTRL_ALARM_DAY is not matched. */
 static bool aspeed_rtc_ast2050_alarm_match_value(uint32_t ctrl, uint32_t alarm,
                                                  uint32_t cnt)
 {
@@ -131,19 +138,15 @@ static bool aspeed_rtc_ast2050_alarm_match_value(uint32_t ctrl, uint32_t alarm,
         return false;
     }
     if ((ctrl & RTC_CTRL_ALARM_SEC) &&
-        ((cnt & 0xff) != (alarm & 0xff))) {
+        ((cnt & 0xff) != (alarm & 0x3f))) {              /* RTC04 sec[5:0] */
         return false;
     }
     if ((ctrl & RTC_CTRL_ALARM_MIN) &&
-        (((cnt >> 8) & 0xff) != ((alarm >> 8) & 0xff))) {
+        (((cnt >> 8) & 0xff) != ((alarm >> 6) & 0x3f))) { /* RTC04 min[11:6] */
         return false;
     }
     if ((ctrl & RTC_CTRL_ALARM_HOUR) &&
-        (((cnt >> 16) & 0xff) != ((alarm >> 16) & 0xff))) {
-        return false;
-    }
-    if ((ctrl & RTC_CTRL_ALARM_DAY) &&
-        (((cnt >> 24) & 0xff) != ((alarm >> 24) & 0xff))) {
+        (((cnt >> 16) & 0xff) != ((alarm >> 12) & 0x1f))) { /* RTC04 hour[16:12] */
         return false;
     }
     return true;
