@@ -46,7 +46,13 @@
 #define RESTART_MAGIC 0x5Au
 #define RESET_MAGIC   0x99u
 
+#define RTC_ALARM   0x04            /* §24 RTC04: hour[16:12]/min[11:6]/sec[5:0] */
 #define RTC_CTRL_ENABLE 0x1u        /* CONTROL[0] */
+#define RTC_CTRL_ALARM_SEC  0x02u   /* RTC0C[1] enable second alarm */
+#define RTC_CTRL_ALARM_MIN  0x04u   /* RTC0C[2] enable minute alarm */
+#define RTC_CTRL_ALARM_HOUR 0x08u   /* RTC0C[3] enable hour alarm   */
+#define RTC_CTRL_ALARM_DAY  0x10u   /* RTC0C[4] enable day alarm    */
+#define RTC_CTRL_ALARM_MASK 0x1Eu   /* any of the four alarm enables */
 #define RTC_TICK_DIV    32768u      /* datasheet §24: RTC input clock / 32768 */
 
 /* Byte-packed counter layout (matches the silicon-validated Zephyr driver; see
@@ -97,6 +103,87 @@ static uint32_t aspeed_rtc_ast2050_counter(AspeedRtcAST2050State *s)
         return base;
     }
     return rtc_pack_seconds(rtc_unpack_seconds(base) + ticks);
+}
+
+/* ns between two counter ticks (0 if the RTC is unclocked). */
+static uint64_t aspeed_rtc_ast2050_ns_per_tick(AspeedRtcAST2050State *s)
+{
+    if (s->clk_hz == 0) {
+        return 0;
+    }
+    return ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->clk_hz;
+}
+
+/* True when the RTC is enabled, at least one alarm field is enabled, and every
+ * ENABLED RTC04 field (sec[1]/min[2]/hour[3]/day[4]) equals the live counter.
+ * Fields are compared BYTE-packed, consistent with the counter model (the same
+ * datasheet-vs-driver layout question tracked as #186 applies to RTC04). */
+static bool aspeed_rtc_ast2050_alarm_match(AspeedRtcAST2050State *s)
+{
+    uint32_t ctrl = s->regs[RTC_CONTROL >> 2];
+    uint32_t alarm, cnt;
+
+    if (!(ctrl & RTC_CTRL_ENABLE) || !(ctrl & RTC_CTRL_ALARM_MASK)) {
+        return false;
+    }
+    alarm = s->regs[RTC_ALARM >> 2];
+    cnt = aspeed_rtc_ast2050_counter(s);
+
+    if ((ctrl & RTC_CTRL_ALARM_SEC) &&
+        ((cnt & 0xff) != (alarm & 0xff))) {
+        return false;
+    }
+    if ((ctrl & RTC_CTRL_ALARM_MIN) &&
+        (((cnt >> 8) & 0xff) != ((alarm >> 8) & 0xff))) {
+        return false;
+    }
+    if ((ctrl & RTC_CTRL_ALARM_HOUR) &&
+        (((cnt >> 16) & 0xff) != ((alarm >> 16) & 0xff))) {
+        return false;
+    }
+    if ((ctrl & RTC_CTRL_ALARM_DAY) &&
+        (((cnt >> 24) & 0xff) != ((alarm >> 24) & 0xff))) {
+        return false;
+    }
+    return true;
+}
+
+/* (Re)arm or disarm the alarm-check timer after any register change that could
+ * affect the alarm (RTC04, RTC0C, RESTART, RESET). */
+static void aspeed_rtc_ast2050_alarm_update(AspeedRtcAST2050State *s)
+{
+    uint32_t ctrl = s->regs[RTC_CONTROL >> 2];
+    uint64_t ns_per_tick = aspeed_rtc_ast2050_ns_per_tick(s);
+
+    if ((ctrl & RTC_CTRL_ENABLE) && (ctrl & RTC_CTRL_ALARM_MASK) &&
+        ns_per_tick != 0) {
+        timer_mod(s->alarm_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns_per_tick);
+    } else {
+        timer_del(s->alarm_timer);
+        s->alarm_matched = false;
+        qemu_irq_lower(s->alarm_irq);
+    }
+}
+
+/* Fires once per RTC-second while armed: pulse alarm_irq on a rising match. */
+static void aspeed_rtc_ast2050_alarm_tick(void *opaque)
+{
+    AspeedRtcAST2050State *s = opaque;
+    bool match = aspeed_rtc_ast2050_alarm_match(s);
+    uint64_t ns_per_tick = aspeed_rtc_ast2050_ns_per_tick(s);
+
+    if (match && !s->alarm_matched) {
+        qemu_irq_pulse(s->alarm_irq);   /* rising edge -> VIC latches it */
+    }
+    s->alarm_matched = match;
+
+    if (ns_per_tick != 0 &&
+        (s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ENABLE) &&
+        (s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ALARM_MASK)) {
+        timer_mod(s->alarm_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns_per_tick);
+    }
 }
 
 static uint64_t aspeed_rtc_ast2050_read(void *opaque, hwaddr offset, unsigned size)
@@ -158,6 +245,9 @@ static void aspeed_rtc_ast2050_write(void *opaque, hwaddr offset, uint64_t data,
         s->regs[reg] = data;
         break;
     }
+
+    /* Any write to RTC04/RTC0C/RESTART/RESET can arm/disarm or move the alarm. */
+    aspeed_rtc_ast2050_alarm_update(s);
 }
 
 static const MemoryRegionOps aspeed_rtc_ast2050_ops = {
@@ -174,6 +264,9 @@ static void aspeed_rtc_ast2050_reset(DeviceState *dev)
 
     memset(s->regs, 0, sizeof(s->regs));
     s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    timer_del(s->alarm_timer);
+    s->alarm_matched = false;
+    qemu_irq_lower(s->alarm_irq);
 }
 
 static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
@@ -184,17 +277,22 @@ static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->iomem, OBJECT(s), &aspeed_rtc_ast2050_ops, s,
                           TYPE_ASPEED_RTC_AST2050, 0x20);
     sysbus_init_mmio(sbd, &s->iomem);
-    sysbus_init_irq(sbd, &s->irq);
+    sysbus_init_irq(sbd, &s->irq);         /* index 0: RTC IRQ (VIC 22) */
+    sysbus_init_irq(sbd, &s->alarm_irq);   /* index 1: RTC-alarm IRQ (VIC 26) */
+    s->alarm_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                  aspeed_rtc_ast2050_alarm_tick, s);
 }
 
 static const VMStateDescription vmstate_aspeed_rtc_ast2050 = {
     .name = TYPE_ASPEED_RTC_AST2050,
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, AspeedRtcAST2050State,
                              ASPEED_RTC_AST2050_NR_REGS),
         VMSTATE_INT64_V(base_ns, AspeedRtcAST2050State, 2),
+        VMSTATE_TIMER_PTR_V(alarm_timer, AspeedRtcAST2050State, 3),
+        VMSTATE_BOOL_V(alarm_matched, AspeedRtcAST2050State, 3),
         VMSTATE_END_OF_LIST()
     }
 };

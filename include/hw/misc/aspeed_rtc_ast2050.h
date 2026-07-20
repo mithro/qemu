@@ -23,6 +23,7 @@
 #define ASPEED_RTC_AST2050_H
 
 #include "hw/sysbus.h"
+#include "qemu/timer.h"
 #include "qom/object.h"
 
 #define TYPE_ASPEED_RTC_AST2050 "aspeed.rtc-ast2050"
@@ -36,9 +37,19 @@ struct AspeedRtcAST2050State {
 
     /*< public >*/
     MemoryRegion iomem;
-    qemu_irq irq;
+    qemu_irq irq;        /* RTC IRQ (VIC 22) */
+    qemu_irq alarm_irq;  /* RTC-alarm IRQ (VIC 26); §24 RTC04/RTC0C[1:4] */
 
     uint32_t regs[ASPEED_RTC_AST2050_NR_REGS];
+
+    /*
+     * Alarm (#187): a periodic timer runs at the counter's own RTC-second rate
+     * while the alarm is armed (RTC0C[0] enabled AND >=1 of RTC0C[1:4] set); each
+     * tick compares the enabled RTC04 fields against the live counter and pulses
+     * alarm_irq on a rising match edge. alarm_matched is the edge-detect state.
+     */
+    QEMUTimer *alarm_timer;
+    bool alarm_matched;
 
     /*
      * Behavioural counter advance (#158). base_ns is the QEMU_CLOCK_VIRTUAL

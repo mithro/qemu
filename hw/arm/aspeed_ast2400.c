@@ -544,6 +544,13 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                         sc->memmap[ASPEED_DEV_RTC]);
         sysbus_connect_irq(SYS_BUS_DEVICE(&a->rtc_g3), 0,
                            aspeed_soc_get_irq(s, ASPEED_DEV_RTC));
+        /*
+         * The G3's RTC-alarm interrupt is VIC line 26 (distinct from the RTC IRQ
+         * 22; on the AST2400 line 26 is SDHCI, which the G3 lacks — see #172).
+         * Wire the model's alarm IRQ (index 1) straight to VIC input 26.  #187.
+         */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->rtc_g3), 1,
+                           qdev_get_gpio_in(DEVICE(&a->vic), 26));
     } else {
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->rtc), errp)) {
             return;
