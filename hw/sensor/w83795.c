@@ -210,6 +210,34 @@ static void w83795_load_defaults(W83795State *s)
     }
 
     /*
+     * Alarm-status registers ALARM(0..4) (bank 0, regs 0x41..0x45). On silicon
+     * the W83795G continuously compares each measurement against its limit and
+     * latches the out-of-range result here; the driver reads these bytes
+     * directly (drivers/hwmon/w83795.c show_alarm_beep: bit = alarms[index>>3]
+     * >> (index&7), where in<n> -> index n (+1 if n>14) and fan<n> -> index
+     * n+31). Seed the EXACT alarm state this board's silicon reports (host-side
+     * lm-sensors of w83795g-i2c-14-2f,
+     * evidence/real-hw-hwpass/host-w83795-sensors.txt) — each bit is
+     * self-consistent with the measurement already seeded above:
+     *   in1=0V,in3=18mV,in5=0V < min; in7=1.82V > max(0.05V corrupt) ->
+     *                                  ALARM(0)=0x41 bits 1,3,5,7 = 0xAA
+     *   in10=1.59V > max 1.40V      -> ALARM(1)=0x42 bit 2        = 0x04
+     *   in15=1.01>0.91,in16=1.59>1.40 -> ALARM(2)=0x43 bits 0,1   = 0x03
+     *   (temp1..8 all in range)     -> ALARM(3)=0x44             = 0x00
+     *   fan2..8 = 0 RPM < min 400   -> ALARM(4)=0x45 bits 1..7   = 0xFE
+     *   intrusion (ALARM(5)=0x46 bit6) is the CASEOPEN latch handled below.
+     * These are STATIC (a faithful snapshot of the captured silicon state).
+     * Live limit-vs-measurement re-computation + SMBALERT# assertion are the
+     * deferred remainder of #183; no legacy-oracle firmware path reprograms
+     * these limits, so the static seed matches every real boot.
+     */
+    s->regs[0][0x41] = 0xAA;             /* ALARM(0): in1,in3,in5,in7 */
+    s->regs[0][0x42] = 0x04;             /* ALARM(1): in10            */
+    s->regs[0][0x43] = 0x03;             /* ALARM(2): in15,in16       */
+    /* ALARM(3)=0x44 stays 0: no temp/DTS alarm on this silicon        */
+    s->regs[0][0x45] = 0xFE;             /* ALARM(4): fan2..fan8       */
+
+    /*
      * Chassis intrusion (CASEOPEN): the W83795G latches a chassis-open event in
      * ALARM(5) bit6 until firmware clears it via CLR_CHASSIS bit7. Seed it LATCHED
      * (=1): the latch persists across power cycles on real hardware (a board opened
