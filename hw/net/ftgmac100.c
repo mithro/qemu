@@ -302,8 +302,17 @@ static void phy_reset(FTGMAC100State *s)
 {
     /*
      * On the AST2050 (G3) the board (ASUS KGPE-D16) wires the MAC's RMII link
-     * to a dedicated 10/100 Realtek RTL8201CP PHY (F7-NCSI.md; DTS phy-mode=rmii;
-     * DATASHEET-MAC.md §5). The RTL8201CP is 10/100-only: its BMSR has NO extended
+     * to a dedicated 10/100 Realtek RTL8201-family PHY (F7-NCSI.md; DTS
+     * phy-mode=rmii; DATASHEET-MAC.md §5). NAMING NOTE (#181, silicon-reconciled
+     * 2026-07-20): the schematic §14 labels the part RTL8201N-GR, while this model
+     * (and every Linux boot) reports the legacy RTL8201-family MDIO PHY-ID
+     * 0x0000_8201, which Linux's realtek.c names "RTL8201CP". This is NOT a
+     * divergence: the REAL AST2050 reports the SAME id — evidence
+     * openbmc/.../real-hw-g3clk/boot-noclkignore-console.log shows the silicon
+     * Linux attaching "RTL8201CP" identically to QEMU. RTL8201N and the 0x8201-id
+     * "RTL8201CP" are the same legacy family / same 10/100 RMII register surface;
+     * the model is faithful to what the silicon actually puts on MDIO.
+     * The RTL8201-family part is 10/100-only: its BMSR has NO extended
      * status (reg 15 absent, so MII_BMSR_EXTSTAT=0) and its BMCR reset default is
      * 0x3100 (autoneg + 100M + full-duplex) — it never advertises gigabit. The
      * AST2400+ default keeps the RTL8211E gigabit surface (EXTSTAT + SPEED1000),
