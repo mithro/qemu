@@ -270,6 +270,20 @@ static void w83795_do_write(W83795State *s, uint8_t bank, uint8_t reg,
     if (bank >= W83795_NUM_BANKS) {
         return;         /* banks 4-7 are undefined (only 0-3 exist); drop the write */
     }
+    /*
+     * Fan CONTROL (write side of the W83795G function, schematic §10.2 "write
+     * FANCTL1-8 PWM"): writing a fan's PWM-output duty (bank 2, regs 0x10..0x17 =
+     * PWM1..8) makes the corresponding fan-tach INPUT (bank 0, 0x2E..0x35 =
+     * fan1..8) respond, modelling a real fan speeding up / slowing with duty.
+     * RPM = duty * 27 is linear + deterministic (0xFF -> ~6885, 0x61/38% ->
+     * ~2619 ≈ the silicon idle 2641, 0x00 -> stopped). The reset seeds fan/PWM
+     * via direct stores (not this write path), so a plain read without a prior
+     * PWM write keeps the reset-captured tach values (the read-only smoke is
+     * unaffected); only a manual PWM write drives the fan. #174.
+     */
+    if (bank == 2 && reg >= 0x10 && reg <= 0x17) {
+        w83795_set_fan(s, 0x2E + (reg - 0x10), (unsigned)data * 27u);
+    }
     /* Everything else lands in the scratch store (limits, pwm, config). */
     s->regs[bank][reg] = data;
 }
