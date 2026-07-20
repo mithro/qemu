@@ -114,14 +114,48 @@ static uint32_t aspeed_rtc_ast2050_src_hz(AspeedRtcAST2050State *s)
     return (scu08 & SCU08_RTC_CLK_24M) ? s->clk_hz : RTC_TICK_DIV;
 }
 
+/*
+ * Return the current RTC source Hz, RE-ANCHORING if the clock source (SCU08[16])
+ * changed since the last anchor: the ticks accrued at the OLD rate are frozen into
+ * regs[COUNTER] and base_ns reset to now, so a rate change affects only time going
+ * FORWARD — matching silicon, which never retroactively re-rates already-elapsed
+ * time. Without this, live-sampling SCU08[16] would replay the whole interval since
+ * the last RTC-register event at the new rate (a spurious counter jump). Only
+ * triggers when a real previous rate is known (last_src_hz != 0), it actually
+ * changed, and the counter is running (CONTROL[0]); the modelled firmware paths
+ * never flip bit16 mid-enabled-run, but raw SCU pokes (bring-up/test) can.
+ */
+static uint32_t aspeed_rtc_ast2050_sync_and_hz(AspeedRtcAST2050State *s)
+{
+    uint32_t hz = aspeed_rtc_ast2050_src_hz(s);
+
+    if (s->last_src_hz != 0 && hz != s->last_src_hz &&
+        (s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ENABLE)) {
+        int64_t elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->base_ns;
+        uint64_t npt = ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->last_src_hz;
+
+        if (elapsed > 0 && npt) {
+            uint64_t ticks = (uint64_t)elapsed / npt;
+
+            if (ticks) {
+                s->regs[RTC_COUNTER >> 2] = rtc_pack_seconds(
+                    rtc_unpack_seconds(s->regs[RTC_COUNTER >> 2]) + ticks);
+            }
+        }
+        s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    }
+    s->last_src_hz = hz;
+    return hz;
+}
+
 /* The live counter value: the held value in regs[COUNTER] plus the elapsed
  * "RTC seconds" since base_ns, but only while the RTC is enabled (CONTROL[0]).
  * When disabled the counter holds its value (datasheet §24: "If the RTC is
  * disabled, the {Sec,Minu,Hour}Cnt will hold the value"). */
 static uint32_t aspeed_rtc_ast2050_counter(AspeedRtcAST2050State *s)
 {
-    uint32_t base = s->regs[RTC_COUNTER >> 2];
-    uint32_t hz = aspeed_rtc_ast2050_src_hz(s);
+    uint32_t hz = aspeed_rtc_ast2050_sync_and_hz(s);   /* may re-anchor base/base_ns */
+    uint32_t base = s->regs[RTC_COUNTER >> 2];          /* read AFTER a possible sync */
     int64_t elapsed_ns;
     uint64_t ns_per_tick, ticks;
 
@@ -341,6 +375,7 @@ static void aspeed_rtc_ast2050_reset(DeviceState *dev)
 
     memset(s->regs, 0, sizeof(s->regs));
     s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->last_src_hz = 0;   /* "no previous rate": first read records it, no re-anchor */
     timer_del(s->alarm_timer);
     s->alarm_matched = false;
     s->alarm_last_abs = 0;
@@ -369,7 +404,7 @@ static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_aspeed_rtc_ast2050 = {
     .name = TYPE_ASPEED_RTC_AST2050,
-    .version_id = 4,
+    .version_id = 5,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, AspeedRtcAST2050State,
@@ -378,6 +413,7 @@ static const VMStateDescription vmstate_aspeed_rtc_ast2050 = {
         VMSTATE_TIMER_PTR_V(alarm_timer, AspeedRtcAST2050State, 3),
         VMSTATE_BOOL_V(alarm_matched, AspeedRtcAST2050State, 3),
         VMSTATE_UINT64_V(alarm_last_abs, AspeedRtcAST2050State, 4),
+        VMSTATE_UINT32_V(last_src_hz, AspeedRtcAST2050State, 5),
         VMSTATE_END_OF_LIST()
     }
 };

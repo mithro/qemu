@@ -66,15 +66,19 @@ struct AspeedRtcAST2050State {
     /*
      * Behavioural counter advance (#158). base_ns is the QEMU_CLOCK_VIRTUAL
      * timestamp from which the live count is measured relative to the value
-     * currently held in regs[COUNTER]; it is re-anchored on a RESTART load and
-     * on an enable transition. clk_hz is the RTC input-clock frequency: on the
-     * crystal-less KGPE-D16 the firmware selects the 24 MHz source via
-     * SCU08[16]=1 (datasheet §2.19 / §24: no external 32.768 kHz oscillator), so
-     * the RTC's fixed /32768 tick divider yields 24e6/32768 = 732.42 "RTC
-     * seconds" per real second — the fast rate measured on silicon.
+     * currently held in regs[COUNTER]; it is re-anchored on a RESTART load, on an
+     * enable transition, AND on an RTC clock-SOURCE change (see last_src_hz).
+     * The effective source Hz is chosen by SCU08[16] (read live from the SCU):
+     * bit16=0 -> 32.768 kHz -> /32768 -> 1 Hz REAL TIME (silicon-measured 1.00x);
+     * bit16=1 -> the 24 MHz "test only" tap -> /32768 -> 732.42x. clk_hz (device
+     * property, default 24 MHz) supplies the test-tap frequency; clk_hz=0 forces a
+     * frozen RTC. last_src_hz caches the source Hz seen at the last anchor so a
+     * mid-run bit16 change re-anchors (collapses ticks accrued at the OLD rate
+     * into COUNTER) instead of retroactively re-rating the whole elapsed interval.
      */
     int64_t base_ns;
     uint32_t clk_hz;
+    uint32_t last_src_hz;
 };
 
 #endif /* ASPEED_RTC_AST2050_H */
