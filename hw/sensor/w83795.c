@@ -313,6 +313,21 @@ static void w83795_realize(DeviceState *dev, Error **errp)
     w83795_load_defaults(s);
 }
 
+static void w83795_reset_hold(Object *obj, ResetType type)
+{
+    W83795State *s = W83795(obj);
+
+    /*
+     * Real silicon returns to POR state on a system/watchdog reset: BANKSEL
+     * back to bank 0 and all measurement/scratch registers re-latched. Restore
+     * the same seeded defaults the device powers on with, so a rebooted guest
+     * (e.g. after the AST2050 watchdog fires) sees bank 0 + valid readings
+     * rather than stale guest-written state (a left-selected bank or scratch
+     * byte). Mirrors sbtsi_reset_hold / w83601g_reset_hold.
+     */
+    w83795_load_defaults(s);
+}
+
 static const VMStateDescription vmstate_w83795 = {
     .name = "w83795",
     .version_id = 1,
@@ -334,9 +349,11 @@ static const VMStateDescription vmstate_w83795 = {
 static void w83795_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
     dc->realize = w83795_realize;
+    rc->phases.hold = w83795_reset_hold;
     k->event = w83795_event;
     k->recv = w83795_rx;
     k->send = w83795_tx;
