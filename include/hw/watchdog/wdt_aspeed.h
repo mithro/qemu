@@ -33,6 +33,14 @@ struct AspeedWDTState {
     MemoryRegion iomem;
     uint32_t regs[ASPEED_WDT_REGS_MAX];
 
+    /*
+     * Timeout interrupt (datasheet §27, WDT0C[2] "wdt_intr"): when the counter
+     * reaches zero the WDT can raise this interrupt INSTEAD of resetting the SoC.
+     * Left unconnected on machines that only use reset-mode (raising an
+     * unconnected qemu_irq is a no-op), wired to the VIC on the AST2050 (G3).
+     */
+    qemu_irq irq;
+
     AspeedSCUState *scu;
     uint32_t pclk_freq;
 };

@@ -727,6 +727,15 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
             return;
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->wdt[i]), 0, wdt_offset);
+        /*
+         * Wire the WDT timeout-interrupt (§27 WDT0C[2], "generate interrupt
+         * instead of reset") to VIC 27 on the G3.  G3-gated so the AST2400 path
+         * is untouched; only WDT0 (the primary) carries the shared IRQ line. #189.
+         */
+        if (sc->silicon_rev == AST2050_A1_SILICON_REV && i == 0) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(&s->wdt[i]), 0,
+                               aspeed_soc_get_irq(s, ASPEED_DEV_WDT));
+        }
     }
 
     /* RAM  */

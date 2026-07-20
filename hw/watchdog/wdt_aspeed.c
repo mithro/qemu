@@ -14,6 +14,7 @@
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "system/watchdog.h"
+#include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
 #include "hw/watchdog/wdt_aspeed.h"
@@ -260,6 +261,7 @@ static void aspeed_wdt_reset(DeviceState *dev)
     s->regs[WDT_RESET_WIDTH] = 0xFF;
 
     timer_del(s->timer);
+    qemu_irq_lower(s->irq);
 }
 
 static void aspeed_wdt_timer_expired(void *dev)
@@ -271,6 +273,27 @@ static void aspeed_wdt_timer_expired(void *dev)
     if (s->scu->regs[reset_ctrl_reg] & SCU_RESET_SDRAM) {
         timer_del(s->timer);
         s->regs[WDT_CTRL] = 0;
+        return;
+    }
+
+    /*
+     * Datasheet §27 (WDT0C[2] "wdt_intr"): the WDT generates EITHER an interrupt
+     * OR a SoC reset when it counts down to zero, selected by this bit. In
+     * interrupt mode raise the WDT IRQ and stop; reset mode is unchanged (legacy
+     * firmware leaves the bit clear, so the reset path is untouched). #189.
+     */
+    if (s->regs[WDT_CTRL] & WDT_CTRL_WDT_INTR) {
+        qemu_log_mask(CPU_LOG_RESET,
+                      "Watchdog timer %" HWADDR_PRIx " expired (interrupt mode).\n",
+                      s->iomem.addr);
+        /*
+         * Fire the timeout-interrupt EVENT. This models the WDT raising its
+         * interrupt on timeout (a pulse latches in the VIC under any edge
+         * config). A held level asserted until firmware writes WDT_TIMEOUT_CLEAR
+         * (the currently-unimplemented status/clear regs) is a follow-on refinement.
+         */
+        qemu_irq_pulse(s->irq);
+        timer_del(s->timer);
         return;
     }
 
@@ -290,6 +313,7 @@ static void aspeed_wdt_realize(DeviceState *dev, Error **errp)
 
     assert(s->scu);
 
+    sysbus_init_irq(sbd, &s->irq);   /* WDT timeout interrupt (§27 WDT0C[2]) */
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, aspeed_wdt_timer_expired, dev);
 
     /*
