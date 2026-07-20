@@ -5,17 +5,20 @@
  * RTC10 restart (write 0x5A loads the counter from reload), RTC14 reset (write
  * 0x99 clears).
  *
- * The counter now ADVANCES behaviourally (#158): while CONTROL[0] is set, the
- * live count runs up from the loaded value at the RTC's real rate. The tick rate
- * is the RTC input clock / 32768 (datasheet §24: the RTC divides its clock by
- * 32768 for the 1 "second" tick; the fractional divider makes 12MHz*128/46875 =
- * 32768.0 Hz => real 1 Hz). On the crystal-less KGPE-D16 the firmware selects the
- * 24 MHz source (SCU08[16]=1; datasheet §2.19 "not necessary to include an
- * external 32 KHz oscillator", §24 "clock source from 24MHz"), so the /32768
- * stage yields 24e6/32768 = 732.42 "RTC seconds" per real second — the FAST rate
- * measured on silicon (rtc_smoke set->get advanced ~732x; evidence
- * d14-zephyr/14-rtc-silicon-pass.txt). clk_hz (default 24 MHz) is a device
- * property so a future crystal-equipped board could set 32768 for true 1 Hz.
+ * The counter ADVANCES behaviourally (#158) while CONTROL[0] is set. The tick rate
+ * is the RTC input clock / 32768, and the INPUT CLOCK is selected by SCU08[16]
+ * (datasheet §24 "RTC clock source selection"); the model reads SCU08[16] so the
+ * rate TRACKS the guest's choice, exactly like silicon:
+ *   - SCU08[16]=0 (default): 32.768 kHz internal source -> /32768 -> 1 Hz = REAL
+ *     TIME. Silicon-measured 1.00x over a clean 20 s window (evidence
+ *     d14-zephyr/31-rtc-realtime-bit16-0-silicon.txt). The KGPE-D16 needs no
+ *     EXTERNAL crystal (datasheet §2.19); the internal 32.768 kHz is present.
+ *   - SCU08[16]=1: the 24 MHz "test only" tap -> /32768 -> 24e6/32768 = 732.42x.
+ *     Zephyr's driver forces this (evidence d14-zephyr/14 measured ~732x).
+ * See aspeed_rtc_ast2050_src_hz() below. CORRECTION: earlier this model (and
+ * #158/#186) treated 732x as THE rate — that was a bit16=1 artifact; the fixed
+ * Linux driver clears bit16, so it is a real-time clock. clk_hz (default 24 MHz)
+ * supplies the test-tap frequency; clk_hz=0 forces a frozen RTC for tests.
  *
  * COUNTER BIT LAYOUT — a KNOWN CONFLICT (tracked as #186): datasheet §24 RTC00
  * defines FIELD-packed DayCnt[31:17]/HourCnt[16:12]/MinuCnt[11:6]/SecCnt[5:0],
@@ -37,6 +40,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "exec/address-spaces.h"
 
 #define RTC_COUNTER 0x00
 #define RTC_RELOAD  0x08
@@ -81,6 +85,35 @@ static uint32_t rtc_pack_seconds(uint64_t total)
     return (day << 24) | (hour << 16) | (min << 8) | sec;
 }
 
+/*
+ * The RTC clock SOURCE is selected by SCU08[16] (datasheet §24 "RTC clock source
+ * selection" + §2.19): 0 = the internal 32.768 kHz source (÷32768 -> 1 Hz = REAL
+ * TIME, silicon-measured 1.00x, evidence d14-zephyr/31), 1 = the 24 MHz "test
+ * only" tap (÷32768 -> 24e6/32768 = 732.42x). Read SCU08 from the SCU (mapped at
+ * 0x1E6E2000) so the modelled tick rate TRACKS the guest's clock-source choice,
+ * exactly like real hardware: a guest that leaves/selects the 32.768 kHz source
+ * (the SoC default, and what the fixed Linux driver uses) gets a real-time RTC; a
+ * guest that selects the 24 MHz test tap (Zephyr) gets the fast counter. clk_hz
+ * (device property, default 24 MHz) supplies the test-tap frequency, and clk_hz==0
+ * still forces an unclocked (frozen) RTC for tests. Previously the model always
+ * used clk_hz (24 MHz -> always 732x), which HID the real-time-with-bit16=0
+ * behaviour that silicon showed (#158/#186 correction).
+ */
+#define ASPEED_G3_SCU08_CLK_SEL 0x1E6E2008u
+#define SCU08_RTC_CLK_24M       (1u << 16)
+static uint32_t aspeed_rtc_ast2050_src_hz(AspeedRtcAST2050State *s)
+{
+    uint32_t scu08;
+
+    if (s->clk_hz == 0) {
+        return 0;                       /* property override: frozen RTC */
+    }
+    scu08 = address_space_ldl_le(&address_space_memory, ASPEED_G3_SCU08_CLK_SEL,
+                                 MEMTXATTRS_UNSPECIFIED, NULL);
+    /* bit16=1 -> 24 MHz test tap (clk_hz); bit16=0 -> 32.768 kHz -> real time. */
+    return (scu08 & SCU08_RTC_CLK_24M) ? s->clk_hz : RTC_TICK_DIV;
+}
+
 /* The live counter value: the held value in regs[COUNTER] plus the elapsed
  * "RTC seconds" since base_ns, but only while the RTC is enabled (CONTROL[0]).
  * When disabled the counter holds its value (datasheet §24: "If the RTC is
@@ -88,19 +121,21 @@ static uint32_t rtc_pack_seconds(uint64_t total)
 static uint32_t aspeed_rtc_ast2050_counter(AspeedRtcAST2050State *s)
 {
     uint32_t base = s->regs[RTC_COUNTER >> 2];
+    uint32_t hz = aspeed_rtc_ast2050_src_hz(s);
     int64_t elapsed_ns;
     uint64_t ns_per_tick, ticks;
 
-    if (!(s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ENABLE) || s->clk_hz == 0) {
+    if (!(s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ENABLE) || hz == 0) {
         return base;
     }
     elapsed_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->base_ns;
     if (elapsed_ns <= 0) {
         return base;
     }
-    /* ns per RTC tick = 32768 / clk_hz seconds. Divide (not multiply) to avoid
-     * overflow at long uptimes; 24 MHz => 1365333 ns/tick => 732.42 ticks/s. */
-    ns_per_tick = ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->clk_hz;
+    /* ns per RTC tick = 32768 / src_hz seconds. Divide (not multiply) to avoid
+     * overflow at long uptimes; 24 MHz => 1365333 ns/tick => 732.42 ticks/s;
+     * 32.768 kHz => 1e9 ns/tick => 1 tick/s (real time). */
+    ns_per_tick = ((uint64_t)RTC_TICK_DIV * 1000000000ull) / hz;
     if (ns_per_tick == 0) {
         return base;
     }
@@ -114,10 +149,12 @@ static uint32_t aspeed_rtc_ast2050_counter(AspeedRtcAST2050State *s)
 /* ns between two counter ticks (0 if the RTC is unclocked). */
 static uint64_t aspeed_rtc_ast2050_ns_per_tick(AspeedRtcAST2050State *s)
 {
-    if (s->clk_hz == 0) {
+    uint32_t hz = aspeed_rtc_ast2050_src_hz(s);
+
+    if (hz == 0) {
         return 0;
     }
-    return ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->clk_hz;
+    return ((uint64_t)RTC_TICK_DIV * 1000000000ull) / hz;
 }
 
 /* True when every ENABLED RTC04 field (sec[1]/min[2]/hour[3]) equals the
