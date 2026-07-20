@@ -308,21 +308,38 @@ static void aspeed_ast2400_soc_init(Object *obj)
         object_initialize_child(obj, "vuart", &a->vuart, TYPE_SERIAL_MM);
     }
 
-    snprintf(typename, sizeof(typename), TYPE_ASPEED_XDMA "-%s", socname);
-    object_initialize_child(obj, "xdma", &s->xdma, typename);
+    /*
+     * The AST2050 (G3) has NO X-DMA engine: XDMA (0x1E6E7000/IRQ6) is a G4 block
+     * (qemu-model/AST2050-MEMORY-MAP.md §1d — on the G3, 0x1E6E7000 is unused and
+     * INT#6 belongs to the MDMA memory-DMA engine). Skip creating it on the G3 so
+     * the model does not present a phantom that squats on the real MDMA interrupt.
+     * See device-driver-program #172 (completing the #144 phantom sweep).
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        snprintf(typename, sizeof(typename), TYPE_ASPEED_XDMA "-%s", socname);
+        object_initialize_child(obj, "xdma", &s->xdma, typename);
+    }
 
     snprintf(typename, sizeof(typename), "aspeed.gpio-%s", socname);
     object_initialize_child(obj, "gpio", &s->gpio, typename);
 
-    snprintf(typename, sizeof(typename), "aspeed.sdhci-%s", socname);
-    object_initialize_child(obj, "sdc", &s->sdhci, typename);
+    /*
+     * The AST2050 (G3) has NO SDHCI/eMMC controller: SDHCI is a G4 block, and on
+     * the G3 its address 0x1E740000 is the MDMA engine and IRQ 26 is the RTC-alarm
+     * (memory-map §1d/§10). Skip it on the G3 so the model doesn't expose a phantom
+     * on the real MDMA address + RTC-alarm IRQ. See #172.
+     */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        snprintf(typename, sizeof(typename), "aspeed.sdhci-%s", socname);
+        object_initialize_child(obj, "sdc", &s->sdhci, typename);
 
-    object_property_set_int(OBJECT(&s->sdhci), "num-slots", 2, &error_abort);
+        object_property_set_int(OBJECT(&s->sdhci), "num-slots", 2, &error_abort);
 
-    /* Init sd card slot class here so that they're under the correct parent */
-    for (i = 0; i < ASPEED_SDHCI_NUM_SLOTS; ++i) {
-        object_initialize_child(obj, "sdhci[*]", &s->sdhci.slots[i],
-                                TYPE_SYSBUS_SDHCI);
+        /* Init sd card slot class here so that they're under the correct parent */
+        for (i = 0; i < ASPEED_SDHCI_NUM_SLOTS; ++i) {
+            object_initialize_child(obj, "sdhci[*]", &s->sdhci.slots[i],
+                                    TYPE_SYSBUS_SDHCI);
+        }
     }
 
     /*
@@ -726,14 +743,16 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                            aspeed_soc_get_irq(s, ASPEED_DEV_ETH1 + i));
     }
 
-    /* XDMA */
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->xdma), errp)) {
-        return;
+    /* XDMA (G4 only — absent on the G3, see the create-time comment + #172) */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->xdma), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->xdma), 0,
+                        sc->memmap[ASPEED_DEV_XDMA]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->xdma), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_XDMA));
     }
-    aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->xdma), 0,
-                    sc->memmap[ASPEED_DEV_XDMA]);
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->xdma), 0,
-                       aspeed_soc_get_irq(s, ASPEED_DEV_XDMA));
 
     /* GPIO */
     /*
@@ -756,14 +775,16 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio), 0,
                        aspeed_soc_get_irq(s, ASPEED_DEV_GPIO));
 
-    /* SDHCI */
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdhci), errp)) {
-        return;
+    /* SDHCI (G4 only — absent on the G3; 0x1E740000=MDMA, IRQ26=RTC-alarm. #172) */
+    if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->sdhci), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->sdhci), 0,
+                        sc->memmap[ASPEED_DEV_SDHCI]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdhci), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_SDHCI));
     }
-    aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->sdhci), 0,
-                    sc->memmap[ASPEED_DEV_SDHCI]);
-    sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdhci), 0,
-                       aspeed_soc_get_irq(s, ASPEED_DEV_SDHCI));
 
     /* LPC */
     if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
