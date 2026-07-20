@@ -640,6 +640,7 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     /* VUART (AST2050/G3) — host Serial-over-LAN bridge; see the soc_init note. */
     if (sc->has_vuart) {
         SerialMM *smm = &a->vuart;
+        DeviceState *org;   /* assigned AFTER object_initialize_child (below) */
 
         qdev_prop_set_uint8(DEVICE(smm), "regshift", 2);
         qdev_prop_set_uint32(DEVICE(smm), "baudbase", 38400);
@@ -650,8 +651,24 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         if (!sysbus_realize(SYS_BUS_DEVICE(smm), errp)) {
             return;
         }
-        sysbus_connect_irq(SYS_BUS_DEVICE(smm), 0,
-                           aspeed_soc_get_irq(s, ASPEED_DEV_VUART));
+        /*
+         * VUART is an LPC SUB-interrupt: the AST2050 Interrupt Source Table
+         * (datasheet §10, Table 36) has ONE "LPC interrupt" at VIC source 8 and no
+         * separate VUART source. So VUART and lpc_g3 must be OR-combined onto VIC 8
+         * — connecting two device outputs to one qemu_irq is last-writer-wins, not
+         * an OR, and would drop a pending interrupt of the other device. Create the
+         * 2-input OR gate here (VUART = input 0); the G3 LPC block below wires
+         * lpc_g3 to input 1. (ASPEED_DEV_VUART and ASPEED_DEV_LPC both map to VIC 8.)
+         */
+        object_initialize_child(OBJECT(dev), "vuart-lpc-orgate",
+                                &a->vuart_lpc_orgate, TYPE_OR_IRQ);
+        org = DEVICE(&a->vuart_lpc_orgate);
+        qdev_prop_set_uint32(org, "num-lines", 2);
+        if (!qdev_realize(org, NULL, errp)) {
+            return;
+        }
+        qdev_connect_gpio_out(org, 0, aspeed_soc_get_irq(s, ASPEED_DEV_VUART));
+        sysbus_connect_irq(SYS_BUS_DEVICE(smm), 0, qdev_get_gpio_in(org, 0));
         aspeed_mmio_map(s, SYS_BUS_DEVICE(smm), 0,
                         sc->memmap[ASPEED_DEV_VUART]);
     }
@@ -865,8 +882,20 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->lpc_g3), 0,
                         sc->memmap[ASPEED_DEV_LPC]);
-        sysbus_connect_irq(SYS_BUS_DEVICE(&a->lpc_g3), 0,
-                           aspeed_soc_get_irq(s, ASPEED_DEV_LPC));
+        /*
+         * VUART shares "LPC interrupt" (VIC 8, datasheet Table 36), so route lpc_g3
+         * through input 1 of the OR gate created in the VUART block above rather than
+         * driving VIC 8 directly (which would clobber a pending VUART interrupt).
+         * has_vuart is always set on this G3 machine; keep a direct-connect fallback
+         * for robustness if a future variant omits the VUART.
+         */
+        if (sc->has_vuart) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(&a->lpc_g3), 0,
+                               qdev_get_gpio_in(DEVICE(&a->vuart_lpc_orgate), 1));
+        } else {
+            sysbus_connect_irq(SYS_BUS_DEVICE(&a->lpc_g3), 0,
+                               aspeed_soc_get_irq(s, ASPEED_DEV_LPC));
+        }
 
         /*
          * AST2050 (G3) P2A PCI->AHB back door (the culvert `p2a` path). It has

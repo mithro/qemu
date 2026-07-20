@@ -16,6 +16,7 @@
 #include "hw/arm/armv7m.h"
 #include "hw/intc/aspeed_vic.h"
 #include "hw/intc/aspeed_intc.h"
+#include "hw/or-irq.h"
 #include "hw/misc/aspeed_scu.h"
 #include "hw/misc/aspeed_pwm_ast2050.h"
 #include "hw/misc/aspeed_video_ast2050.h"
@@ -124,6 +125,13 @@ struct Aspeed2400SoCState {
     AspeedP2AAST2050State p2a_g3;     /* AST2050 (G3) P2A PCI->AHB back door */
     AspeedUDCAST2050State udc_g3;     /* AST2050 (G3) USB device/vhub @0x1E6A0000 */
     SerialMM vuart;                   /* AST2050 (G3) host VUART @0x1E787000 (SOL) */
+    /*
+     * VUART is an LPC SUB-interrupt on real hardware: the AST2050 Interrupt
+     * Source Table (datasheet §10, Table 36) has a SINGLE "LPC interrupt" at VIC
+     * source 8 and no separate VUART source. So VUART and lpc_g3 must be OR-combined
+     * onto VIC 8 (two devices driving one qemu_irq is last-writer-wins, not an OR).
+     */
+    OrIRQState vuart_lpc_orgate;
 };
 
 #define TYPE_ASPEED2400_SOC "aspeed2400-soc"
