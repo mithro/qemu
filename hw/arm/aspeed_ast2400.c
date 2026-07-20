@@ -472,12 +472,18 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
 
     /*
      * SRAM (G4 only). The AST2050 (G3) has NO on-chip SRAM: 0x1E720000 on the
-     * G3 is the A2P (AHB->PCI) bridge, not SRAM (AST2050-MEMORY-MAP.md:55/99,
-     * §9 p97 — SRAM is a G4 block; #176). Skip the SRAM on the G3 so the model
-     * does not present a wrong device at the A2P address. Gated accesses fall
-     * back to the ASPEED_DEV_IOMEM unimplemented catch-all (0x1E600000 +
-     * 0x200000 covers 0x1E720000), so they still respond (no abort) — until a
-     * faithful A2P bridge is modelled there (matrix row 50 / #176).
+     * G3 is the A2P (AHB->PCI) bridge, not SRAM (AST2050-MEMORY-MAP.md:55, §9 p97
+     * — SRAM is a G4 block; #176). So on the G3 skip the SRAM and instead present
+     * the A2P bridge (matrix row 50).
+     *
+     * A2P (datasheet §21.2) is NOT a config-register block — it is a one-way
+     * passthrough WINDOW forwarding ARM(AHB) accesses to P-Bus (PCI) space
+     * (+0x00000..0x7F relocated I/O, +0x10000..0x1FFFF MMIO), auto-enabled by
+     * SCU70[4] (PCI master mode). In this standalone BMC machine there is NO
+     * host/PCI on the P-Bus, so the faithful behaviour is a window that reads
+     * back 0 and drops writes (forwarding to an empty P-Bus) — modelled here as
+     * an explicit named unimplemented region so accesses are logged and the A2P
+     * address is no longer an accidental fall-through to the IOMEM catch-all.
      */
     if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
         sram_name = g_strdup_printf("aspeed.sram.%d", CPU(&a->cpu[0])->cpu_index);
@@ -487,6 +493,9 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         }
         memory_region_add_subregion(s->memory,
                                     sc->memmap[ASPEED_DEV_SRAM], &s->sram);
+    } else {
+        create_unimplemented_device("aspeed.a2p-pbus-window",
+                                    sc->memmap[ASPEED_DEV_SRAM], 0x20000);
     }
 
     /* SCU */
