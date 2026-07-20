@@ -55,6 +55,19 @@
 #define W83795_REG_CHIPID       0xFE
 #define W83795_REG_DEVICEID_A   0xFF
 
+/*
+ * bank 0: chassis-intrusion (CASEOPEN), alarm status, VID — register numbers
+ * from the mainline driver drivers/hwmon/w83795.c (ALARM_CTRL 0x40, ALARM(i)
+ * 0x41+i, CLR_CHASSIS 0x4D, VID_CTRL 0x6A). Intrusion is ALARM(5) bit6, latched
+ * until firmware writes CLR_CHASSIS bit7.
+ */
+#define W83795_REG_ALARM_CTRL   0x40
+#define W83795_REG_ALARM5       0x46    /* ALARM(5): bit6 = chassis intrusion */
+#define W83795_REG_CLR_CHASSIS  0x4D    /* write bit7 clears the intrusion    */
+#define W83795_REG_VID_CTRL     0x6A    /* VID mode: [2:0] in 1..6 => VID set  */
+#define W83795_ALARM_INTRUSION  (1 << 6)
+#define W83795_CLR_CHASSIS_CLR  0x80
+
 /* bank 3 (0x3xx) */
 #define W83795_REG_DTSC         0x01
 #define W83795_REG_DTSE         0x02
@@ -80,6 +93,7 @@ struct W83795State {
     uint8_t ptr;                                    /* register pointer  */
     uint32_t count;                                 /* bytes since START */
     uint8_t vrlsb;                                  /* shadow LSB (0x3C)  */
+    uint8_t intrusion;                              /* CASEOPEN latch (ALARM5 b6) */
 
     /* generic backing store (limits, pwm duty, alarms, scratch) */
     uint8_t regs[W83795_NUM_BANKS][W83795_BANK_SIZE];
@@ -194,6 +208,22 @@ static void w83795_load_defaults(W83795State *s)
     for (int i = 0; i < 8; i++) {
         s->regs[2][0x10 + i] = 0x61;
     }
+
+    /*
+     * Chassis intrusion (CASEOPEN): the W83795G latches a chassis-open event in
+     * ALARM(5) bit6 until firmware clears it via CLR_CHASSIS bit7. Seed it LATCHED
+     * (=1): the latch persists across power cycles on real hardware (a board opened
+     * during assembly stays flagged until cleared), so this both models the real
+     * persistent-latch behaviour and makes the detect->clear path exercisable.
+     */
+    s->intrusion = 1;
+
+    /*
+     * VID: VID_CTRL[2:0] selects the CPU-VID sense mode (0 or 7 == no VID; 1..6
+     * == VID present). The mainline driver reads this to decide has_vid /
+     * dynamic-Vin. Seed mode 1 (VID present) for the dual-Opteron board.
+     */
+    s->regs[0][W83795_REG_VID_CTRL] = 0x01;
 }
 
 static uint8_t w83795_do_read(W83795State *s, uint8_t bank, uint8_t reg)
@@ -234,6 +264,11 @@ static uint8_t w83795_do_read(W83795State *s, uint8_t bank, uint8_t reg)
             return 0x00;
         case W83795_REG_VRLSB:
             return s->vrlsb;
+        case W83795_REG_ALARM5:
+            /* ALARM(5): bit6 is the chassis-intrusion latch; OR it in alongside
+             * any other alarm bits a guest may have stored in the scratch reg. */
+            return (s->regs[0][W83795_REG_ALARM5] & ~W83795_ALARM_INTRUSION) |
+                   (s->intrusion ? W83795_ALARM_INTRUSION : 0);
         default:
             break;
         }
@@ -283,6 +318,16 @@ static void w83795_do_write(W83795State *s, uint8_t bank, uint8_t reg,
      */
     if (bank == 2 && reg >= 0x10 && reg <= 0x17) {
         w83795_set_fan(s, 0x2E + (reg - 0x10), (unsigned)data * 27u);
+    }
+    /*
+     * Chassis-intrusion clear (CASEOPEN): writing CLR_CHASSIS with bit7 set clears
+     * the latched intrusion, exactly the mainline driver's clr_chassis path
+     * (read CLR_CHASSIS, |= 0x80, write back). After this a re-read of ALARM(5)
+     * shows bit6 == 0. Matches real W83795G silicon.
+     */
+    if (bank == 0 && reg == W83795_REG_CLR_CHASSIS &&
+        (data & W83795_CLR_CHASSIS_CLR)) {
+        s->intrusion = 0;
     }
     /* Everything else lands in the scratch store (limits, pwm, config). */
     s->regs[bank][reg] = data;
@@ -344,13 +389,14 @@ static void w83795_reset_hold(Object *obj, ResetType type)
 
 static const VMStateDescription vmstate_w83795 = {
     .name = "w83795",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8(bank, W83795State),
         VMSTATE_UINT8(ptr, W83795State),
         VMSTATE_UINT32(count, W83795State),
         VMSTATE_UINT8(vrlsb, W83795State),
+        VMSTATE_UINT8_V(intrusion, W83795State, 2),
         VMSTATE_UINT8_2DARRAY(regs, W83795State,
                               W83795_NUM_BANKS, W83795_BANK_SIZE),
         VMSTATE_UINT8_ARRAY(meas0, W83795State, W83795_BANK_SIZE),
