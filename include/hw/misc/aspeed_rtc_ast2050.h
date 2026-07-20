@@ -1,11 +1,21 @@
 /*
  * ASPEED AST2050 (G3) Real-Time Clock — counter style.
  *
- * Datasheet §24: RTC00 counter status (R: [5:0]sec [11:6]min [16:12]hour
- * [31:17]day), RTC08 reload, RTC0C control ([0]enable), RTC10 restart (write 0x5A
- * to load the counter from reload), RTC14 reset (write 0x99). Four independent
- * up-counters; SecCnt ticks at 1 Hz off CLK32K. NOT the AST2400 BCD/CMOS RTC.
- * See qemu-model/peripherals/rtc.
+ * Registers: RTC00 counter status (R), RTC08 reload, RTC0C control ([0]enable),
+ * RTC10 restart (write 0x5A to load the counter from reload), RTC14 reset (write
+ * 0x99). NOT the AST2400 BCD/CMOS RTC. See qemu-model/peripherals/rtc.
+ *
+ * COUNTER packing: the model advances the counter BYTE-packed
+ * (sec[7:0]/min[15:8]/hour[23:16]/day[31:24]) to match the silicon-validated
+ * Zephyr driver (drivers/rtc/rtc_aspeed_g3.c). NOTE: datasheet §24 documents a
+ * FIELD-packed layout ([5:0]sec/[11:6]min/[16:12]hour/[31:17]day) — this conflict
+ * is unresolved pending a silicon minute-wrap test and is tracked as #186; the
+ * .c file header explains the choice.
+ *
+ * TICK RATE: the counter runs at clk_hz/32768 (datasheet §24 /32768 divider). On
+ * the crystal-less KGPE-D16 clk_hz defaults to 24 MHz (SCU08[16]=1), so the
+ * counter advances at 24e6/32768 = 732.42 "RTC seconds"/real second — NOT 1 Hz.
+ * See the .c file for the full derivation and #158.
  *
  * This code is licensed under the GPL version 2 or later.
  */
