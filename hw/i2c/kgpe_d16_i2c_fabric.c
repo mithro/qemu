@@ -115,14 +115,23 @@ static void kgpe_d16_i2c_fabric_select(void *opaque, int line, int level)
 static void kgpe_d16_i2c_fabric_sys_pwrgd(void *opaque, int line, int level)
 {
     KgpeD16I2cFabricState *s = KGPE_D16_I2C_FABRIC(opaque);
+    bool new_pwrgd = !!level;
 
-    s->sys_pwrgd = !!level;
     /*
      * Board-glue simplification (see the struct comment): POST completes as
-     * soon as host power is good. A test that has explicitly raised
-     * sb-post-complt-n keeps its setting only while power stays up.
+     * soon as host power is good, so the board ties sb_post_complt_n to
+     * !SYS_PWRGD. Apply that tie ONLY on a genuine SYS_PWRGD level TRANSITION:
+     * the host-on GPIO is re-driven on EVERY unrelated GPIO write (the aspeed
+     * pwrseq fires unconditionally and qemu_set_irq does not de-dup on
+     * unchanged level), so re-applying the tie on every call would silently
+     * revert an explicit sb-post-complt-n test override (the SP5100-owns-
+     * during-POST window) on the next incidental GPIO access. A test that
+     * raises sb-post-complt-n now keeps it until SYS_PWRGD actually changes.
      */
-    s->sb_post_complt_n = !level;
+    if (new_pwrgd != s->sys_pwrgd) {
+        s->sb_post_complt_n = !new_pwrgd;
+    }
+    s->sys_pwrgd = new_pwrgd;
 }
 
 static void kgpe_d16_i2c_fabric_sb_post(void *opaque, int line, int level)
