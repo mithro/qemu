@@ -44,12 +44,20 @@ struct AspeedRtcAST2050State {
 
     /*
      * Alarm (#187): a periodic timer runs at the counter's own RTC-second rate
-     * while the alarm is armed (RTC0C[0] enabled AND >=1 of RTC0C[1:4] set); each
-     * tick compares the enabled RTC04 fields against the live counter and pulses
-     * alarm_irq on a rising match edge. alarm_matched is the edge-detect state.
+     * while the alarm is armed (RTC0C[0] enabled AND >=1 of RTC0C[1:4] set). To
+     * match silicon — where the alarm comparator is combinational and the VIC
+     * latches the match edge the instant the counter reaches the alarm value,
+     * regardless of what software is doing — each tick does a CATCH-UP SCAN of
+     * every counter value crossed since the previous check (alarm_last_abs) and
+     * pulses alarm_irq on a rising match edge. This is robust to the timer firing
+     * late (e.g. a tight guest poll loop starving the QEMU main loop): a sampling
+     * model that only compared the single live counter value would skip the
+     * one-tick-per-day match and never fire. alarm_matched is the edge-detect
+     * state; alarm_last_abs is the absolute-seconds value last scanned.
      */
     QEMUTimer *alarm_timer;
     bool alarm_matched;
+    uint64_t alarm_last_abs;
 
     /*
      * Behavioural counter advance (#158). base_ns is the QEMU_CLOCK_VIRTUAL

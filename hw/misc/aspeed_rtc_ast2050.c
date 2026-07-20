@@ -55,6 +55,12 @@
 #define RTC_CTRL_ALARM_MASK 0x1Eu   /* any of the four alarm enables */
 #define RTC_TICK_DIV    32768u      /* datasheet §24: RTC input clock / 32768 */
 
+/* Upper bound on the alarm catch-up scan window (RTC-seconds), a backstop for
+ * pathological main-loop starvation. 200000 RTC-seconds is ~273 real seconds at
+ * the 732x crystal-less rate — far beyond any realistic timer latency (normally
+ * the scan is a single iteration). */
+#define RTC_ALARM_SCAN_CAP  200000u
+
 /* Byte-packed counter layout (matches the silicon-validated Zephyr driver; see
  * the #186 note in the file header). Decode a packed value to absolute seconds. */
 static uint64_t rtc_unpack_seconds(uint32_t v)
@@ -114,21 +120,16 @@ static uint64_t aspeed_rtc_ast2050_ns_per_tick(AspeedRtcAST2050State *s)
     return ((uint64_t)RTC_TICK_DIV * 1000000000ull) / s->clk_hz;
 }
 
-/* True when the RTC is enabled, at least one alarm field is enabled, and every
- * ENABLED RTC04 field (sec[1]/min[2]/hour[3]/day[4]) equals the live counter.
- * Fields are compared BYTE-packed, consistent with the counter model (the same
- * datasheet-vs-driver layout question tracked as #186 applies to RTC04). */
-static bool aspeed_rtc_ast2050_alarm_match(AspeedRtcAST2050State *s)
+/* True when, for the given control + alarm registers, every ENABLED RTC04 field
+ * (sec[1]/min[2]/hour[3]/day[4]) equals the byte-packed candidate counter value
+ * `cnt`. Fields are compared BYTE-packed, consistent with the counter model (the
+ * same datasheet-vs-driver layout question tracked as #186 applies to RTC04). */
+static bool aspeed_rtc_ast2050_alarm_match_value(uint32_t ctrl, uint32_t alarm,
+                                                 uint32_t cnt)
 {
-    uint32_t ctrl = s->regs[RTC_CONTROL >> 2];
-    uint32_t alarm, cnt;
-
     if (!(ctrl & RTC_CTRL_ENABLE) || !(ctrl & RTC_CTRL_ALARM_MASK)) {
         return false;
     }
-    alarm = s->regs[RTC_ALARM >> 2];
-    cnt = aspeed_rtc_ast2050_counter(s);
-
     if ((ctrl & RTC_CTRL_ALARM_SEC) &&
         ((cnt & 0xff) != (alarm & 0xff))) {
         return false;
@@ -157,6 +158,14 @@ static void aspeed_rtc_ast2050_alarm_update(AspeedRtcAST2050State *s)
 
     if ((ctrl & RTC_CTRL_ENABLE) && (ctrl & RTC_CTRL_ALARM_MASK) &&
         ns_per_tick != 0) {
+        uint32_t cnt = aspeed_rtc_ast2050_counter(s);
+
+        /* Anchor the catch-up scan at the current count (so we do not
+         * retroactively fire for counts before the alarm was armed) and seed the
+         * rising-edge state with whether the counter already matches now. */
+        s->alarm_last_abs = rtc_unpack_seconds(cnt);
+        s->alarm_matched = aspeed_rtc_ast2050_alarm_match_value(
+            ctrl, s->regs[RTC_ALARM >> 2], cnt);
         timer_mod(s->alarm_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns_per_tick);
     } else {
@@ -166,21 +175,49 @@ static void aspeed_rtc_ast2050_alarm_update(AspeedRtcAST2050State *s)
     }
 }
 
-/* Fires once per RTC-second while armed: pulse alarm_irq on a rising match. */
+/*
+ * Fires roughly once per RTC-second while armed. To match silicon — where the
+ * alarm comparator asserts (and the VIC latches the edge) the instant the
+ * counter reaches the alarm value, and cannot be starved by software — this
+ * SCANS every counter value crossed since the previous check and pulses
+ * alarm_irq on a rising match edge. A naive "compare only the current live
+ * counter" sample would skip the one-tick-per-day match whenever this timer runs
+ * late (e.g. a tight guest poll loop starving the QEMU main loop) and then never
+ * fire until the next day. The scan is O(gap) — normally 1 iteration (the timer
+ * fires ~on time), capped for pathological starvation.
+ */
 static void aspeed_rtc_ast2050_alarm_tick(void *opaque)
 {
     AspeedRtcAST2050State *s = opaque;
-    bool match = aspeed_rtc_ast2050_alarm_match(s);
+    uint32_t ctrl = s->regs[RTC_CONTROL >> 2];
+    uint32_t alarm = s->regs[RTC_ALARM >> 2];
     uint64_t ns_per_tick = aspeed_rtc_ast2050_ns_per_tick(s);
+    uint64_t cur_abs = rtc_unpack_seconds(aspeed_rtc_ast2050_counter(s));
+    uint64_t start = s->alarm_last_abs;
+    bool prev = s->alarm_matched;
+    bool rising = false;
 
-    if (match && !s->alarm_matched) {
+    /* Cap the look-back window; any realistic timer latency is a handful of
+     * ticks, far below this. */
+    if (cur_abs > start + RTC_ALARM_SCAN_CAP) {
+        start = cur_abs - RTC_ALARM_SCAN_CAP;
+    }
+    for (uint64_t a = start + 1; a <= cur_abs; a++) {
+        bool m = aspeed_rtc_ast2050_alarm_match_value(ctrl, alarm,
+                                                      rtc_pack_seconds(a));
+        if (m && !prev) {
+            rising = true;
+        }
+        prev = m;
+    }
+    if (rising) {
         qemu_irq_pulse(s->alarm_irq);   /* rising edge -> VIC latches it */
     }
-    s->alarm_matched = match;
+    s->alarm_matched = prev;
+    s->alarm_last_abs = cur_abs;
 
     if (ns_per_tick != 0 &&
-        (s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ENABLE) &&
-        (s->regs[RTC_CONTROL >> 2] & RTC_CTRL_ALARM_MASK)) {
+        (ctrl & RTC_CTRL_ENABLE) && (ctrl & RTC_CTRL_ALARM_MASK)) {
         timer_mod(s->alarm_timer,
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns_per_tick);
     }
@@ -266,6 +303,7 @@ static void aspeed_rtc_ast2050_reset(DeviceState *dev)
     s->base_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     timer_del(s->alarm_timer);
     s->alarm_matched = false;
+    s->alarm_last_abs = 0;
     qemu_irq_lower(s->alarm_irq);
 }
 
@@ -285,7 +323,7 @@ static void aspeed_rtc_ast2050_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_aspeed_rtc_ast2050 = {
     .name = TYPE_ASPEED_RTC_AST2050,
-    .version_id = 3,
+    .version_id = 4,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, AspeedRtcAST2050State,
@@ -293,6 +331,7 @@ static const VMStateDescription vmstate_aspeed_rtc_ast2050 = {
         VMSTATE_INT64_V(base_ns, AspeedRtcAST2050State, 2),
         VMSTATE_TIMER_PTR_V(alarm_timer, AspeedRtcAST2050State, 3),
         VMSTATE_BOOL_V(alarm_matched, AspeedRtcAST2050State, 3),
+        VMSTATE_UINT64_V(alarm_last_abs, AspeedRtcAST2050State, 4),
         VMSTATE_END_OF_LIST()
     }
 };
