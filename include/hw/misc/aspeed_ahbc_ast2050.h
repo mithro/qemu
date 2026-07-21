@@ -43,6 +43,9 @@ struct AspeedAHBCAST2050State {
     MemoryRegion *remap_mr;
 
     uint32_t regs[ASPEED_AHBC_AST2050_NR_REGS];
+
+    /* §12.3: writes to 0x80..0x8C require the 0xAEED1A03 key at 0x00 first. */
+    bool unlocked;
 };
 
 #endif /* ASPEED_AHBC_AST2050_H */

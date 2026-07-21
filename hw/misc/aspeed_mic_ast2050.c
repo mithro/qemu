@@ -250,7 +250,26 @@ static void aspeed_mic_write(void *opaque, hwaddr offset, uint64_t data,
         }
         aspeed_mic_update_irq(s);
         break;
-    default:                                     /* MIC00/04/08/10 */
+    case MIC_STOPPAGE:
+        s->regs[reg] = data;
+        /*
+         * §13.3: if the write-back TAG [31:16] is non-zero, MICE writes
+         * {TAG,16'b0} into the checksum-buffer entry of page [15:0] (software
+         * polls that entry to confirm a scan stop). The stop-scan-AT-page itself
+         * is moot in this synchronous-scan model (a scan completes atomically on
+         * enable); the observable TAG write-back is modelled here. The in_scan
+         * guard covers the same alias-into-own-window re-entrancy hazard.
+         */
+        if ((data & 0xFFFF0000) && !s->in_scan) {
+            uint32_t csum = s->regs[MIC_CHKSUMBUF >> 2] & MIC_ADDR_MASK;
+            uint32_t page = data & 0xFFFF;
+            s->in_scan = true;
+            address_space_stl_le(&address_space_memory, csum + (uint64_t)page * 4,
+                                 data & 0xFFFF0000, MEMTXATTRS_UNSPECIFIED, NULL);
+            s->in_scan = false;
+        }
+        break;
+    default:                                     /* MIC00/04/08 */
         s->regs[reg] = data;
         break;
     }

@@ -20,6 +20,9 @@
 #define AHBC_REMAP       0x8C
 #define AHBC_REMAP_SDRAM BIT(0)   /* 0: static memory at 0x0, 1: SDRAM at 0x0 */
 
+#define AHBC_KEY    0x00          /* protection key register            */
+#define AHBC_UNLOCK 0xAEED1A03    /* §12.3: write this to 0x00 to unlock */
+
 static void aspeed_ahbc_set_remap(AspeedAHBCAST2050State *s, bool sdram)
 {
     if (s->remap_mr) {
@@ -37,6 +40,9 @@ static uint64_t aspeed_ahbc_read(void *opaque, hwaddr offset, unsigned size)
                       "\n", __func__, offset);
         return 0;
     }
+    if (offset == AHBC_KEY) {
+        return s->unlocked ? 1 : 0;   /* §12.3 p114: "Read 1 = key opened" */
+    }
     return s->regs[reg];
 }
 
@@ -49,6 +55,26 @@ static void aspeed_ahbc_write(void *opaque, hwaddr offset, uint64_t data,
     if (reg >= ASPEED_AHBC_AST2050_NR_REGS) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: out-of-bounds write at 0x%" HWADDR_PRIx
                       "\n", __func__, offset);
+        return;
+    }
+
+    if (offset == AHBC_KEY) {
+        /* §12.3 p114: write 0xAEED1A03 -> 0x80..0x8C programmable; else locked. */
+        s->unlocked = (data == AHBC_UNLOCK);
+        return;
+    }
+
+    /*
+     * 0x80 (priority), 0x88 (IRQ ctrl) and 0x8C (remap) are write-protected until
+     * the key at 0x00 is unlocked — on real silicon a write here is dropped while
+     * locked. Enforcing this keeps the model faithful (a remap-enable that skips
+     * the key must NOT take effect).
+     */
+    if (!s->unlocked) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: write to protected AHBC reg 0x%" HWADDR_PRIx
+                      " while locked (write 0xAEED1A03 to 0x00 first)\n",
+                      __func__, offset);
         return;
     }
 
@@ -72,6 +98,7 @@ static void aspeed_ahbc_reset(DeviceState *dev)
     AspeedAHBCAST2050State *s = ASPEED_AHBC_AST2050(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
+    s->unlocked = false;   /* §12.3: registers locked until the key is written */
     /* Reset default: AHBC8C[0]=0 -> boot from static memory (alias disabled). */
     aspeed_ahbc_set_remap(s, false);
 }
@@ -88,11 +115,12 @@ static void aspeed_ahbc_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_aspeed_ahbc_ast2050 = {
     .name = TYPE_ASPEED_AHBC_AST2050,
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, AspeedAHBCAST2050State,
                              ASPEED_AHBC_AST2050_NR_REGS),
+        VMSTATE_BOOL(unlocked, AspeedAHBCAST2050State),
         VMSTATE_END_OF_LIST()
     }
 };
