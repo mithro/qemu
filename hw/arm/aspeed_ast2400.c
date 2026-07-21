@@ -18,6 +18,7 @@
 #include "hw/char/serial-mm.h"
 #include "qemu/module.h"
 #include "qemu/error-report.h"
+#include "qemu/log.h"
 #include "hw/i2c/aspeed_i2c.h"
 #include "hw/irq.h"
 #include "net/net.h"
@@ -25,6 +26,41 @@
 #include "target/arm/cpu-qom.h"
 
 #define ASPEED_SOC_IOMEM_SIZE       0x00200000
+
+/*
+ * AST2050 (G3) A2P (AHB->PCI) window @0x1E720000 (0x20000). The G4 has on-chip
+ * SRAM here; the G3 does NOT (datasheet §9 p97 / §21.2) — it is a one-way
+ * passthrough forwarding ARM(AHB) accesses to the P-Bus (PCI). In this
+ * standalone BMC there is no host/PCI on the P-Bus, so the real silicon reads
+ * back a constant 0x04000008 at every word across the whole window and ignores
+ * writes (JTAG-measured on the real AST2050, 2026-07-21; adjacent blocks read 0,
+ * so the value is A2P-specific — evidence openbmc/.../evidence/soc-a2p/). Model
+ * that faithfully instead of the generic unimplemented-device 0 readback (#176).
+ */
+#define ASPEED_G3_A2P_IDLE 0x04000008u
+
+static uint64_t aspeed_a2p_read(void *opaque, hwaddr offset, unsigned size)
+{
+    return ASPEED_G3_A2P_IDLE;
+}
+
+static void aspeed_a2p_write(void *opaque, hwaddr offset, uint64_t data,
+                             unsigned size)
+{
+    qemu_log_mask(LOG_GUEST_ERROR, "%s: write 0x%" PRIx64 " to A2P window "
+                  "+0x%" HWADDR_PRIx " dropped (empty P-Bus)\n",
+                  __func__, data, offset);
+}
+
+static const MemoryRegionOps aspeed_a2p_ops = {
+    .read = aspeed_a2p_read,
+    .write = aspeed_a2p_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl.min_access_size = 4,
+    .impl.max_access_size = 4,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+};
 
 static const hwaddr aspeed_soc_ast2400_memmap[] = {
     [ASPEED_DEV_SPI_BOOT]  = 0x00000000,
@@ -549,8 +585,15 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         memory_region_add_subregion(s->memory,
                                     sc->memmap[ASPEED_DEV_SRAM], &s->sram);
     } else {
-        create_unimplemented_device("aspeed.a2p-pbus-window",
-                                    sc->memmap[ASPEED_DEV_SRAM], 0x20000);
+        /*
+         * G3: no SRAM here — the A2P (AHB->PCI) window. Reads back the silicon-
+         * measured empty-P-Bus constant and drops writes (aspeed_a2p_ops). Reuse
+         * the (otherwise-unused-on-G3) s->sram MemoryRegion to hold it.
+         */
+        memory_region_init_io(&s->sram, OBJECT(s), &aspeed_a2p_ops, s,
+                              "aspeed.a2p-pbus-window", 0x20000);
+        memory_region_add_subregion(s->memory,
+                                    sc->memmap[ASPEED_DEV_SRAM], &s->sram);
     }
 
     /* SCU */
