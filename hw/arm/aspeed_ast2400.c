@@ -498,6 +498,30 @@ static void aspeed_2050_i2c_rst(void *opaque, int n, int level)
         sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->i2c), 0), !level);
 }
 
+static void aspeed_2050_mdma_rst(void *opaque, int n, int level)
+{
+    Aspeed2400SoCState *a = ASPEED2400_SOC(opaque);
+
+    /*
+     * SCU04[16] = DMA_RST_N (datasheet Fig.54): the MDMA engine is held in
+     * reset at power-on and its register file is inert (reads 0 / writes
+     * dropped) until firmware clears the bit. Silicon-confirmed: a JTAG probe
+     * of 0x1E740000 read 0 / ignored writes until SCU04[16] was cleared
+     * (evidence soc-mdma/04). Disable the MMIO window while held in reset.
+     */
+    memory_region_set_enabled(
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(&a->mdma_g3), 0), !level);
+}
+
+static void aspeed_2050_mic_rst(void *opaque, int n, int level)
+{
+    Aspeed2400SoCState *a = ASPEED2400_SOC(opaque);
+
+    /* SCU04[18] = MIC_RST_N (datasheet Fig.55): same reset-held-inert model. */
+    memory_region_set_enabled(
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(&a->mic_g3), 0), !level);
+}
+
 static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
 {
     int i;
@@ -1124,6 +1148,10 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
             qemu_allocate_irq(aspeed_2050_lclk_stop, a, 0));
         qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-i2c-rst", 0,
             qemu_allocate_irq(aspeed_2050_i2c_rst, s, 0));
+        qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-mdma-rst", 0,
+            qemu_allocate_irq(aspeed_2050_mdma_rst, s, 0));
+        qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-mic-rst", 0,
+            qemu_allocate_irq(aspeed_2050_mic_rst, s, 0));
     }
 }
 

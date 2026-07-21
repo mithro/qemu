@@ -710,6 +710,8 @@ static void aspeed_2050_scu_propagate_gates(AspeedSCUState *s)
     qemu_set_irq(s->g3_uartclk_stop, !!(s->regs[CLK_STOP_CTRL] & BIT(15)));
     qemu_set_irq(s->g3_lclk_stop,    !!(s->regs[CLK_STOP_CTRL] & BIT(8)));
     qemu_set_irq(s->g3_i2c_rst,      !!(s->regs[SYS_RST_CTRL]  & BIT(2)));
+    qemu_set_irq(s->g3_mdma_rst,     !!(s->regs[SYS_RST_CTRL]  & BIT(16)));
+    qemu_set_irq(s->g3_mic_rst,      !!(s->regs[SYS_RST_CTRL]  & BIT(18)));
 }
 
 static uint64_t aspeed_ast2050_scu_read(void *opaque, hwaddr offset,
@@ -788,6 +790,10 @@ static void aspeed_2050_scu_instance_init(Object *obj)
                              "g3-lclk-stop", 1);
     qdev_init_gpio_out_named(DEVICE(obj), &s->g3_i2c_rst,
                              "g3-i2c-rst", 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->g3_mdma_rst,
+                             "g3-mdma-rst", 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->g3_mic_rst,
+                             "g3-mic-rst", 1);
 }
 
 static void aspeed_2050_scu_reset(DeviceState *dev)

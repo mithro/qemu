@@ -52,6 +52,8 @@ struct AspeedSCUState {
     qemu_irq g3_uartclk_stop;   /* SCU0C[15]: UART1+UART2 (one shared gate) */
     qemu_irq g3_lclk_stop;      /* SCU0C[8]:  LPC controller clock          */
     qemu_irq g3_i2c_rst;        /* SCU04[2]:  I2C/SMBus controller reset    */
+    qemu_irq g3_mdma_rst;       /* SCU04[16]: MDMA engine reset (DMA_RST_N) */
+    qemu_irq g3_mic_rst;        /* SCU04[18]: MIC engine reset  (MIC_RST_N) */
 
     /*
      * AST2050 (G3) only: use the datasheet-faithful G3 reset table
