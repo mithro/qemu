@@ -41,6 +41,7 @@ static const hwaddr aspeed_soc_ast2400_memmap[] = {
     [ASPEED_DEV_ADC]    = 0x1E6E9000,
     [ASPEED_DEV_SRAM]   = 0x1E720000,
     [ASPEED_DEV_SDHCI]  = 0x1E740000,
+    [ASPEED_DEV_MDMA]   = 0x1E740000,   /* G3: 0x1E740000 is MDMA, not SDHCI (§9/§22) */
     [ASPEED_DEV_GPIO]   = 0x1E780000,
     [ASPEED_DEV_RTC]    = 0x1E781000,
     [ASPEED_DEV_TIMER1] = 0x1E782000,
@@ -79,6 +80,7 @@ static const hwaddr aspeed_soc_ast2500_memmap[] = {
     [ASPEED_DEV_VIDEO]  = 0x1E700000,
     [ASPEED_DEV_SRAM]   = 0x1E720000,
     [ASPEED_DEV_SDHCI]  = 0x1E740000,
+    [ASPEED_DEV_MDMA]   = 0x1E740000,   /* G3: 0x1E740000 is MDMA, not SDHCI (§9/§22) */
     [ASPEED_DEV_GPIO]   = 0x1E780000,
     [ASPEED_DEV_RTC]    = 0x1E781000,
     [ASPEED_DEV_TIMER1] = 0x1E782000,
@@ -136,6 +138,9 @@ static const int aspeed_soc_ast2400_irqmap[] = {
     /* AST2050/AST1100 datasheet §10 p.99: Video Engine = INT#7 (the same
      * source number the aspeed-g4.dtsi video node uses on the AST2400). */
     [ASPEED_DEV_VIDEO]  = 7,
+    /* AST2050 §10 Table 36: MDMA = INT#6 (the source the phantom XDMA squats on
+     * upstream; XDMA is gated off on the G3, so INT#6 is free for the real MDMA). */
+    [ASPEED_DEV_MDMA]   = 6,
 };
 
 #define aspeed_soc_ast2500_irqmap aspeed_soc_ast2400_irqmap
@@ -355,6 +360,16 @@ static void aspeed_ast2400_soc_init(Object *obj)
             object_initialize_child(obj, "sdhci[*]", &s->sdhci.slots[i],
                                     TYPE_SYSBUS_SDHCI);
         }
+    }
+
+    /*
+     * On the G3, 0x1E740000 is the MDMA memory-copy/fill engine (§22), i.e. the
+     * SAME address that is SDHCI on the G4 (skipped above). Create the faithful
+     * MDMA model (IRQ6) so the block responds instead of the iomem catch-all.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "mdma", &a->mdma_g3,
+                                TYPE_ASPEED_MDMA_AST2050);
     }
 
     /*
@@ -708,6 +723,20 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(smm), 0,
                         sc->memmap[ASPEED_DEV_PUART]);
+    }
+
+    /*
+     * MDMA (AST2050/G3, 0x1E740000, §22) — memory-copy/fill engine on VIC INT#6.
+     * Replaces the iomem catch-all fall-through at this address.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->mdma_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->mdma_g3), 0,
+                        sc->memmap[ASPEED_DEV_MDMA]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->mdma_g3), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_MDMA));
     }
 
     /* I2C */
