@@ -29,6 +29,7 @@
 static const hwaddr aspeed_soc_ast2400_memmap[] = {
     [ASPEED_DEV_SPI_BOOT]  = 0x00000000,
     [ASPEED_DEV_IOMEM]  = 0x1E600000,
+    [ASPEED_DEV_AHBC]   = 0x1E600000,   /* G3 AHBC (§12); overlays the iomem catch-all base */
     [ASPEED_DEV_FMC]    = 0x1E620000,
     [ASPEED_DEV_SPI1]   = 0x1E630000,
     [ASPEED_DEV_EHCI1]  = 0x1E6A1000,
@@ -66,6 +67,7 @@ static const hwaddr aspeed_soc_ast2400_memmap[] = {
 static const hwaddr aspeed_soc_ast2500_memmap[] = {
     [ASPEED_DEV_SPI_BOOT]  = 0x00000000,
     [ASPEED_DEV_IOMEM]  = 0x1E600000,
+    [ASPEED_DEV_AHBC]   = 0x1E600000,   /* G3 AHBC (§12); overlays the iomem catch-all base */
     [ASPEED_DEV_FMC]    = 0x1E620000,
     [ASPEED_DEV_SPI1]   = 0x1E630000,
     [ASPEED_DEV_SPI2]   = 0x1E631000,
@@ -370,6 +372,16 @@ static void aspeed_ast2400_soc_init(Object *obj)
     if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
         object_initialize_child(obj, "mdma", &a->mdma_g3,
                                 TYPE_ASPEED_MDMA_AST2050);
+    }
+
+    /*
+     * AHB Bus Controller (§12, 0x1E600000). Register model + the AHBC8C[0] boot-
+     * remap that aliases SDRAM to 0x0 (created in realize) — the low aperture the
+     * 28-bit MDMA engine uses to reach DRAM.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "ahbc", &a->ahbc_g3,
+                                TYPE_ASPEED_AHBC_AST2050);
     }
 
     /*
@@ -737,6 +749,33 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
                         sc->memmap[ASPEED_DEV_MDMA]);
         sysbus_connect_irq(SYS_BUS_DEVICE(&a->mdma_g3), 0,
                            aspeed_soc_get_irq(s, ASPEED_DEV_MDMA));
+    }
+
+    /*
+     * AHBC (§12, 0x1E600000) + its AHBC8C[0] boot-remap. Create the SDRAM-low
+     * alias first: an alias of the DRAM mapped at 0x0, at a priority ABOVE the
+     * 0x0 spi_boot_container (added at default priority 0) so that when AHBC8C[0]
+     * is set the low aperture shows SDRAM. It is DEFAULT-DISABLED (reset = boot
+     * from static memory, §12.3 p115), so the C2/C4/C-UBOOT oracles — which leave
+     * AHBC8C[0]=0 — see no memory-map change. Enabling it gives the 28-bit MDMA
+     * engine a path to DRAM (matrix rows 45/49).
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        uint64_t alias_size = MIN(memory_region_size(s->dram_mr), 0x10000000);
+
+        memory_region_init_alias(&a->dram_low_alias, OBJECT(s),
+                                 "aspeed.sdram-low-remap", s->dram_mr, 0,
+                                 alias_size);
+        memory_region_add_subregion_overlap(s->memory, 0x0,
+                                            &a->dram_low_alias, 1);
+        memory_region_set_enabled(&a->dram_low_alias, false);
+
+        a->ahbc_g3.remap_mr = &a->dram_low_alias;
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->ahbc_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->ahbc_g3), 0,
+                        sc->memmap[ASPEED_DEV_AHBC]);
     }
 
     /* I2C */
