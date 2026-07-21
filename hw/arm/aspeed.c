@@ -44,6 +44,7 @@ struct AspeedMachineState {
     AspeedSoCState *soc;
     MemoryRegion boot_rom;
     bool mmio_exec;
+    bool ts_dimm;
     uint32_t uart_chosen;
     char *fmc_model;
     char *spi_model;
@@ -717,6 +718,27 @@ static void kgpe_d16_bmc_i2c_fabric_init(AspeedMachineState *bmc)
     dimm_ad = kgpe_d16_i2c_fabric_get_bus(fabric, KGPE_D16_FABRIC_Y2_DIMM_AD);
     spd = g_memdup2(kgpe_d16_dimm_a2_spd, sizeof(kgpe_d16_dimm_a2_spd));
     smbus_eeprom_init_one(dimm_ad, 0x51, spd);
+
+    /*
+     * Optional TS-equipped DIMM (opt-in `-M kgpe-d16-bmc,ts-dimm=on`; default
+     * OFF keeps the model faithful to THIS rig, whose A2 UDIMM has SPD byte32=0
+     * so its TSOD address NAKs on both QEMU and silicon). A TS-equipped DIMM in
+     * slot A2 (SPD 0x51 = 0x50+slot1) presents a JEDEC JC-42.4 TSOD at
+     * 0x18+slot1 = 0x19 on the same Y2 (I2C10) bank; model it so the TSOD
+     * datapath (BMC I2C2 -> QU9 -> QU5 Y2 -> jc42) is exercisable end-to-end.
+     * A common server config (most registered/ECC DDR3 DIMMs carry a TSOD), so
+     * this is a faithful alternative population of the same board, not a
+     * fabrication. schematic §10.2 (0x18-0x1F); MUX-FABRIC §5b; #205.
+     */
+    if (bmc->ts_dimm) {
+        /* 42000 mC (42 C): a plausible, distinctive DIMM temperature — a
+         * non-default value proves an end-to-end read of THIS jc42 through
+         * the mux (not a coincidental model default). */
+        DeviceState *tsod = DEVICE(i2c_slave_create_simple(dimm_ad, "jc42",
+                                                           0x19));
+        object_property_set_int(OBJECT(tsod), "temperature", 42000,
+                                &error_abort);
+    }
 }
 
 static void quanta_q71l_bmc_i2c_init(AspeedMachineState *bmc)
@@ -1307,11 +1329,22 @@ static void aspeed_set_mmio_exec(Object *obj, bool value, Error **errp)
     ASPEED_MACHINE(obj)->mmio_exec = value;
 }
 
+static bool aspeed_get_ts_dimm(Object *obj, Error **errp)
+{
+    return ASPEED_MACHINE(obj)->ts_dimm;
+}
+
+static void aspeed_set_ts_dimm(Object *obj, bool value, Error **errp)
+{
+    ASPEED_MACHINE(obj)->ts_dimm = value;
+}
+
 static void aspeed_machine_instance_init(Object *obj)
 {
     AspeedMachineClass *amc = ASPEED_MACHINE_GET_CLASS(obj);
 
     ASPEED_MACHINE(obj)->mmio_exec = false;
+    ASPEED_MACHINE(obj)->ts_dimm = false;
     ASPEED_MACHINE(obj)->hw_strap1 = amc->hw_strap1;
 }
 
@@ -1382,6 +1415,14 @@ static void aspeed_machine_class_props_init(ObjectClass *oc)
                                    aspeed_set_mmio_exec);
     object_class_property_set_description(oc, "execute-in-place",
                            "boot directly from CE0 flash device");
+
+    object_class_property_add_bool(oc, "ts-dimm",
+                                   aspeed_get_ts_dimm,
+                                   aspeed_set_ts_dimm);
+    object_class_property_set_description(oc, "ts-dimm",
+                           "kgpe-d16-bmc: populate a TS-equipped DIMM (JEDEC "
+                           "JC-42.4 TSOD) behind the QU5 mux (default off = the "
+                           "rig's TS-less DIMM, where the TSOD address NAKs)");
 
     object_class_property_add_str(oc, "bmc-console", aspeed_get_bmc_console,
                                   aspeed_set_bmc_console);
