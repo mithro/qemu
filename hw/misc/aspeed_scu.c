@@ -713,20 +713,19 @@ static void aspeed_2050_scu_propagate_gates(AspeedSCUState *s)
     qemu_set_irq(s->g3_mdma_rst,     !!(s->regs[SYS_RST_CTRL]  & BIT(16)));
     qemu_set_irq(s->g3_mic_rst,      !!(s->regs[SYS_RST_CTRL]  & BIT(18)));
     /*
-     * The Hash & Crypto Engine is held off if its YCLK is stopped (SCU0C[13],
-     * "Stop YCLK (For HAC)") OR either of its two documented reset inputs is
-     * asserted. The AST2050/AST1100 A3 datasheet V1.05 gives the crypto engine
-     * TWO resets: SCU04[4]=AES_RST_N (named as the Crypto Engine reset in the
-     * §8.2 Clock/Reset Tree Mapping Table) and SCU04[5]=hrstn (Figure 43
-     * "Crypto Engine Reset"). Only SCU04[4] is held at the SCU04 reset default
-     * (0x000FFE5C: bit4=1, bit5=0) — that is the reset the silicon HAC hash test
-     * had to clear (with SCU0C[13]) before SHA-256 would compute — but a
-     * faithful model stops the engine when EITHER documented reset is asserted.
+     * HAC compute is off if its YCLK is stopped OR AES_RST_N is held.
+     * SCU04[4] = "Reset HAC Engine" is the ONLY crypto reset (datasheet V1.05
+     * SCU04 bit-field table + §8.2 Clock/Reset Tree, which lists the Crypto
+     * Engine with a single reset AES_RST_N). Do NOT also gate on SCU04[5] —
+     * that bit is "Reset LPC Controller", an unrelated peripheral. (A mangled
+     * PDF adjacency of the "Figure 43: Crypto Engine Reset" caption — which
+     * belongs to bit 4 — next to the SCU04[5] token once misled this code into
+     * an invented second crypto reset; the authoritative bit table is the
+     * oracle, not the linearized figure captions.)
      */
     qemu_set_irq(s->g3_hace_gate,
                  !!(s->regs[CLK_STOP_CTRL] & BIT(13)) ||
-                 !!(s->regs[SYS_RST_CTRL]  & BIT(4))  ||
-                 !!(s->regs[SYS_RST_CTRL]  & BIT(5)));
+                 !!(s->regs[SYS_RST_CTRL]  & BIT(4)));
 }
 
 static uint64_t aspeed_ast2050_scu_read(void *opaque, hwaddr offset,
