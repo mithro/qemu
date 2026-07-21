@@ -351,14 +351,13 @@ static void aspeed_ast2400_soc_init(Object *obj)
                               "ram-size");
 
     /*
-     * The AST2050 (G3) has ONE watchdog (datasheet §2.13 "Watchdog Timer",
-     * singular; only WDT00..WDT18 registers at 0x1E785000). The AST2400 has two.
-     * Skip the phantom WDT2 on the G3 so the faithful machine exposes no second
-     * watchdog. Gate _init and realize identically (see the WDT realize loop).
-     * #144 (G3 device-count faithfulness).
+     * The AST2050 (G3) has ONE watchdog (datasheet §2.13, singular); the G3 SoC
+     * class (aspeed_soc_ast2050_class_init) already sets wdts_num=1, so this loop
+     * creates only WDT1 on the G3 with no per-loop gate needed. (The board DTS
+     * also disables the inherited g4.dtsi wdt2@1e785020 so the kernel does not
+     * probe a block the machine lacks.)
      */
-    for (i = 0; i < sc->wdts_num &&
-             !(sc->silicon_rev == AST2050_A1_SILICON_REV && i >= 1); i++) {
+    for (i = 0; i < sc->wdts_num; i++) {
         snprintf(typename, sizeof(typename), "aspeed.wdt-%s", socname);
         object_initialize_child(obj, "wdt[*]", &s->wdt[i], typename);
     }
@@ -967,10 +966,8 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     aspeed_mmio_map(s, SYS_BUS_DEVICE(&s->sdmc), 0,
                     sc->memmap[ASPEED_DEV_SDMC]);
 
-    /* Watch dog */
-    /* G3 has one watchdog only — skip the phantom WDT2 (see the init loop). #144 */
-    for (i = 0; i < sc->wdts_num &&
-             !(sc->silicon_rev == AST2050_A1_SILICON_REV && i >= 1); i++) {
+    /* Watch dog (G3 wdts_num=1 -> only WDT1; see the _init loop). */
+    for (i = 0; i < sc->wdts_num; i++) {
         AspeedWDTClass *awc = ASPEED_WDT_GET_CLASS(&s->wdt[i]);
         hwaddr wdt_offset = sc->memmap[ASPEED_DEV_WDT] + i * awc->iosize;
 
