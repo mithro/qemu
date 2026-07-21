@@ -30,6 +30,7 @@ static const hwaddr aspeed_soc_ast2400_memmap[] = {
     [ASPEED_DEV_SPI_BOOT]  = 0x00000000,
     [ASPEED_DEV_IOMEM]  = 0x1E600000,
     [ASPEED_DEV_AHBC]   = 0x1E600000,   /* G3 AHBC (§12); overlays the iomem catch-all base */
+    [ASPEED_DEV_MIC]    = 0x1E640000,   /* G3 MIC memory-integrity-check (§13) */
     [ASPEED_DEV_FMC]    = 0x1E620000,
     [ASPEED_DEV_SPI1]   = 0x1E630000,
     [ASPEED_DEV_EHCI1]  = 0x1E6A1000,
@@ -68,6 +69,7 @@ static const hwaddr aspeed_soc_ast2500_memmap[] = {
     [ASPEED_DEV_SPI_BOOT]  = 0x00000000,
     [ASPEED_DEV_IOMEM]  = 0x1E600000,
     [ASPEED_DEV_AHBC]   = 0x1E600000,   /* G3 AHBC (§12); overlays the iomem catch-all base */
+    [ASPEED_DEV_MIC]    = 0x1E640000,   /* G3 MIC memory-integrity-check (§13) */
     [ASPEED_DEV_FMC]    = 0x1E620000,
     [ASPEED_DEV_SPI1]   = 0x1E630000,
     [ASPEED_DEV_SPI2]   = 0x1E631000,
@@ -143,6 +145,8 @@ static const int aspeed_soc_ast2400_irqmap[] = {
     /* AST2050 §10 Table 36: MDMA = INT#6 (the source the phantom XDMA squats on
      * upstream; XDMA is gated off on the G3, so INT#6 is free for the real MDMA). */
     [ASPEED_DEV_MDMA]   = 6,
+    /* AST2050 §10 Table 36: MIC = INT#1 (unused upstream, free on the G3). */
+    [ASPEED_DEV_MIC]    = 1,
 };
 
 #define aspeed_soc_ast2500_irqmap aspeed_soc_ast2400_irqmap
@@ -382,6 +386,15 @@ static void aspeed_ast2400_soc_init(Object *obj)
     if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
         object_initialize_child(obj, "ahbc", &a->ahbc_g3,
                                 TYPE_ASPEED_AHBC_AST2050);
+    }
+
+    /*
+     * MIC (§13, 0x1E640000, IRQ1) — memory-integrity-check engine. Reaches DRAM
+     * through the AHBC boot-remap low aperture (created in realize).
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "mic", &a->mic_g3,
+                                TYPE_ASPEED_MIC_AST2050);
     }
 
     /*
@@ -776,6 +789,20 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         }
         aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->ahbc_g3), 0,
                         sc->memmap[ASPEED_DEV_AHBC]);
+    }
+
+    /*
+     * MIC (AST2050/G3, 0x1E640000, §13) — memory-integrity-check engine on VIC
+     * INT#1. Replaces the iomem catch-all fall-through at this address.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        if (!sysbus_realize(SYS_BUS_DEVICE(&a->mic_g3), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(&a->mic_g3), 0,
+                        sc->memmap[ASPEED_DEV_MIC]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&a->mic_g3), 0,
+                           aspeed_soc_get_irq(s, ASPEED_DEV_MIC));
     }
 
     /* I2C */

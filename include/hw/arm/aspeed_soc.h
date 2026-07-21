@@ -21,6 +21,7 @@
 #include "hw/misc/aspeed_pwm_ast2050.h"
 #include "hw/misc/aspeed_mdma_ast2050.h"
 #include "hw/misc/aspeed_ahbc_ast2050.h"
+#include "hw/misc/aspeed_mic_ast2050.h"
 #include "hw/misc/aspeed_video_ast2050.h"
 #include "hw/misc/aspeed_rtc_ast2050.h"
 #include "hw/misc/aspeed_smc_ast2050.h"
@@ -130,6 +131,7 @@ struct Aspeed2400SoCState {
     SerialMM puart;                   /* AST2050 (G3) LPC pass-through UART @0x1E788000 (§29.4) */
     AspeedMDMAAST2050State mdma_g3;    /* AST2050 (G3) MDMA memory-copy/fill @0x1E740000 (§22) */
     AspeedAHBCAST2050State ahbc_g3;    /* AST2050 (G3) AHB bus controller @0x1E600000 (§12) */
+    AspeedMICAST2050State mic_g3;      /* AST2050 (G3) memory-integrity-check @0x1E640000 (§13) */
     MemoryRegion dram_low_alias;      /* AHBC8C[0] boot-remap: SDRAM aliased to 0x0 (default off) */
     /*
      * VUART is an LPC SUB-interrupt on real hardware: the AST2050 Interrupt
@@ -294,6 +296,7 @@ enum {
     ASPEED_DEV_PUART,
     ASPEED_DEV_MDMA,
     ASPEED_DEV_AHBC,
+    ASPEED_DEV_MIC,
 };
 
 qemu_irq aspeed_soc_get_irq(AspeedSoCState *s, int dev);
