@@ -307,7 +307,15 @@ static void aspeed_ast2400_soc_init(Object *obj)
     snprintf(typename, sizeof(typename), "aspeed.fmc-%s", socname);
     object_initialize_child(obj, "fmc", &s->fmc, typename);
 
-    for (i = 0; i < sc->spis_num; i++) {
+    /*
+     * The AST2050 (G3) has ONE flash controller — the SMC/FMC (datasheet §2.8
+     * "Static Memory Controller (SMC) - SPI Flash Memory Controller", singular).
+     * The AST2400 adds a separate SPI1 at 0x1E630000; the G3 has no such block, so
+     * don't create the phantom on the G3 (only the FMC above). Gate _init + realize
+     * identically (matches the EHCI gate). #144 (G3 device-count faithfulness).
+     */
+    for (i = 0; i < sc->spis_num
+             && sc->silicon_rev != AST2050_A1_SILICON_REV; i++) {
         snprintf(typename, sizeof(typename), "aspeed.spi%d-%s", i + 1, socname);
         object_initialize_child(obj, "spi[*]", &s->spi[i], typename);
     }
@@ -928,7 +936,9 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(&s->spi_boot_container, 0x0, &s->spi_boot);
 
     /* SPI */
-    for (i = 0; i < sc->spis_num; i++) {
+    /* G3 has one flash controller (the FMC) — no phantom SPI1 (see the init loop). #144 */
+    for (i = 0; i < sc->spis_num
+             && sc->silicon_rev != AST2050_A1_SILICON_REV; i++) {
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->spi[i]), errp)) {
             return;
         }

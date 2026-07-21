@@ -475,9 +475,16 @@ static void aspeed_machine_init(MachineState *machine)
         aspeed_board_init_flashes(&bmc->soc->fmc,
                               bmc->fmc_model ? bmc->fmc_model : amc->fmc_model,
                               amc->num_cs, 0);
-        aspeed_board_init_flashes(&bmc->soc->spi[0],
+        /*
+         * The AST2050 (G3) has one flash controller (the FMC/SMC); it has no
+         * SPI1, so soc->spi[0] is not instantiated (#144). Don't attach a flash
+         * to the phantom controller (would dereference an uninitialised child).
+         */
+        if (sc->silicon_rev != AST2050_A1_SILICON_REV) {
+            aspeed_board_init_flashes(&bmc->soc->spi[0],
                               bmc->spi_model ? bmc->spi_model : amc->spi_model,
                               1, amc->num_cs);
+        }
     }
 
     if (machine->kernel_filename && sc->num_cpus > 1) {
