@@ -1507,6 +1507,32 @@ static const TypeInfo aspeed_2400_i2c_info = {
     .class_init = aspeed_2400_i2c_class_init,
 };
 
+static void aspeed_2050_i2c_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    AspeedI2CClass *aic = ASPEED_I2C_CLASS(klass);
+
+    dc->desc = "ASPEED 2050 (G3) I2C Controller";
+
+    /*
+     * The AST2050/AST1100 integrate 7 I2C/SMBus controllers, not the AST2400's
+     * 14 (datasheet V1.05: "Integrate 7 sets of multi-function I2C/SMBus bus
+     * controllers", "one set of global registers and 7 sets of device
+     * registers"). The register file is otherwise AST2400-compatible, so this
+     * inherits TYPE_ASPEED_2400_I2C and only caps the bus count: with the
+     * inherited gap=7 / reg_size=0x40, the 7 engines map to base + 0x40*(n+1)
+     * = 0x1E78A040 .. 0x1E78A1C0 for n=0..6, matching G3 silicon, and the
+     * AST2400's upper 7 phantom engines (0x1E78A300+) are removed.
+     */
+    aic->num_busses = 7;
+}
+
+static const TypeInfo aspeed_2050_i2c_info = {
+    .name = TYPE_ASPEED_2050_I2C,
+    .parent = TYPE_ASPEED_2400_I2C,
+    .class_init = aspeed_2050_i2c_class_init,
+};
+
 static qemu_irq aspeed_2500_i2c_bus_get_irq(AspeedI2CBus *bus)
 {
     return bus->controller->irq;
@@ -1628,6 +1654,7 @@ static void aspeed_i2c_register_types(void)
     type_register_static(&aspeed_i2c_bus_slave_info);
     type_register_static(&aspeed_i2c_info);
     type_register_static(&aspeed_2400_i2c_info);
+    type_register_static(&aspeed_2050_i2c_info);
     type_register_static(&aspeed_2500_i2c_info);
     type_register_static(&aspeed_2600_i2c_info);
     type_register_static(&aspeed_1030_i2c_info);

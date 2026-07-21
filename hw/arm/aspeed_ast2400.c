@@ -289,7 +289,17 @@ static void aspeed_ast2400_soc_init(Object *obj)
         object_initialize_child(obj, "adc", &s->adc, typename);
     }
 
-    snprintf(typename, sizeof(typename), "aspeed.i2c-%s", socname);
+    /*
+     * The AST2050 (G3) reuses the AST2400 child devices via socname="ast2400",
+     * but its I2C block has 7 engines, not the AST2400's 14 (datasheet V1.05).
+     * Use the G3-specific 7-engine I2C type so the model does not expose 7
+     * phantom controllers the silicon lacks. Other SoCs keep aspeed.i2c-<soc>.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        snprintf(typename, sizeof(typename), "aspeed.i2c-ast2050");
+    } else {
+        snprintf(typename, sizeof(typename), "aspeed.i2c-%s", socname);
+    }
     object_initialize_child(obj, "i2c", &s->i2c, typename);
 
     object_initialize_child(obj, "peci", &s->peci, TYPE_ASPEED_PECI);
