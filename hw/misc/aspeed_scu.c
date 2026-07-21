@@ -865,6 +865,50 @@ static void aspeed_2050_scu_reset(DeviceState *dev)
     aspeed_2050_scu_propagate_gates(s);
 }
 
+/*
+ * AST2050 (G3) H-PLL default (strap-fallback) frequency, selected by SCU70[11:9]
+ * (datasheet §18 "Get the H-PLL frequency, SCU70[11:9]"), in MHz. Distinct from
+ * the AST2400, which reads [9:8]. Index = (SCU70 >> 9) & 0x7 = 000..111.
+ */
+static const uint16_t hpll_ast2050_strap_mhz[8] = {
+    266, 233, 200, 166, 133, 100, 300, 24,
+};
+
+/*
+ * G3-faithful H-PLL calculation (#142). The AST2050 reference clock (CLKIN) is a
+ * FIXED 24 MHz — the G3 has no 24/25/48 MHz clock strap (SCU70 bit23 is the
+ * LPC-reset pin, NOT SCU_HW_STRAP_CLK_25M_IN as on the AST2400), so the shared
+ * aspeed_2400_scu_calc_hpll (which strap-decodes CLKIN as 25 MHz and reads the
+ * H-PLL select from [9:8]) mis-derives the timer/PCLK rate at reset. The
+ * programmed path shares the AST2400 (2-OD)*(N+2)/(D+1) core formula, but off
+ * the 24 MHz CLKIN; the strap fallback uses the SCU70[11:9] table above.
+ */
+static uint32_t aspeed_2050_scu_calc_hpll(AspeedSCUState *s, uint32_t hpll_reg)
+{
+    const uint32_t clkin = 24000000; /* G3 fixed 24 MHz reference (no clk strap) */
+
+    if (hpll_reg & SCU_AST2400_H_PLL_OFF) {
+        return 0;
+    }
+
+    if (hpll_reg & SCU_AST2400_H_PLL_PROGRAMMED) {
+        uint32_t multiplier = 1;
+
+        if (!(hpll_reg & SCU_AST2400_H_PLL_BYPASS_EN)) {
+            uint32_t n  = (hpll_reg >> 5) & 0x3f;
+            uint32_t od = (hpll_reg >> 4) & 0x1;
+            uint32_t d  = hpll_reg & 0xf;
+
+            multiplier = (2 - od) * ((n + 2) / (d + 1));
+        }
+
+        return clkin * multiplier;
+    }
+
+    /* HW strap fallback: G3 H-PLL select is SCU70[11:9] (not the AST2400 [9:8]). */
+    return hpll_ast2050_strap_mhz[(s->hw_strap1 >> 9) & 0x7] * 1000000u;
+}
+
 static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -886,15 +930,14 @@ static void aspeed_2050_scu_class_init(ObjectClass *klass, void *data)
      */
     asc->resets = ast2400_a0_resets;
     /*
-     * Reuse the AST2400 clock helpers: the AST2050 shares the H-PLL/M-PLL
-     * (2-OD)*(N+2)/(D+1) core formula, and at reset SCU24[18]=0 so the CPU clock
-     * comes from the SCU70[11:9] strap (the programmed 0x4291 is not applied) --
-     * identical to the AST2400 strap path. The AST2050 PLL post-divider [14:12]
-     * only affects the *programmed* path (bit18=1), which reset does not use; it
-     * is modelled when the timer clock-rate fidelity is validated. CLKIN is the
-     * fixed 24 MHz reference (clkin_25Mhz=false; no 24/25/48 MHz strap on G3).
+     * G3-faithful H-PLL (#142): the AST2050 shares the (2-OD)*(N+2)/(D+1) core
+     * formula but off a FIXED 24 MHz CLKIN, and its strap-fallback H-PLL select
+     * is SCU70[11:9] (not the AST2400 [9:8]); SCU70 bit23 is the LPC-reset pin,
+     * not a 25 MHz clock strap. aspeed_2050_scu_calc_hpll encodes both. At reset
+     * SCU24[18]=0 so the CPU clock comes from the SCU70[11:9] strap. get_apb /
+     * apb_divider are the shared AST2400 helpers (H-PLL / (PCLK_DIV+1) / 2).
      */
-    asc->calc_hpll = aspeed_2400_scu_calc_hpll;
+    asc->calc_hpll = aspeed_2050_scu_calc_hpll;
     asc->get_apb = aspeed_2400_scu_get_apb_freq;
     asc->apb_divider = 2;
     asc->nr_regs = ASPEED_SCU_NR_REGS;
