@@ -1152,6 +1152,11 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
             qemu_allocate_irq(aspeed_2050_mdma_rst, s, 0));
         qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-mic-rst", 0,
             qemu_allocate_irq(aspeed_2050_mic_rst, s, 0));
+        /* HACE: the register file stays live but the compute engine is gated on
+         * SCU0C[13] YCLK-stop / SCU04[4] AES_RST_N — connect straight to the
+         * HACE model's g3-hace-gate input (no MMIO toggle). */
+        qdev_connect_gpio_out_named(DEVICE(&s->scu), "g3-hace-gate", 0,
+            qdev_get_gpio_in_named(DEVICE(&s->hace), "g3-hace-gate", 0));
     }
 }
 

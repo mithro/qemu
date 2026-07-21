@@ -40,6 +40,14 @@ struct AspeedHACEState {
     AddressSpace dram_as;
 
     QCryptoHash *hash_ctx;
+
+    /*
+     * AST2050 (G3) only: driven by the SCU's g3-hace-gate line — true when the
+     * HAC compute engine is off (SCU0C[13] YCLK stopped or SCU04[4] AES_RST_N
+     * held). Gates do_hash_operation so the engine matches silicon. Unconnected
+     * (stays false) on G4/G5, so their behaviour is unchanged.
+     */
+    bool g3_compute_gated;
 };
 
 

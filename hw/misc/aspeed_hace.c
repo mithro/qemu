@@ -369,6 +369,19 @@ static void aspeed_hace_write(void *opaque, hwaddr addr, uint64_t data,
         int algo;
         data &= ahc->hash_mask;
 
+        if (s->g3_compute_gated) {
+            /*
+             * AST2050 (G3): the HAC compute engine is off — its YCLK is stopped
+             * (SCU0C[13]) or AES_RST_N is held (SCU04[4]). The register file
+             * stays live (the CMD value is still stored below), but writing the
+             * command does NOT run the hash and sets no completion status, which
+             * is what real silicon does (evidence soc-hace/01: the digest was
+             * untouched until both bits were cleared). This gate is inert on
+             * G4/G5 (the g3-hace-gate input is only connected on the G3 SoC).
+             */
+            break;
+        }
+
         if ((data & HASH_DIGEST_HMAC)) {
             qemu_log_mask(LOG_UNIMP,
                           "%s: HMAC mode not implemented\n",
@@ -441,12 +454,19 @@ static void aspeed_hace_reset(DeviceState *dev)
     s->total_req_len = 0;
 }
 
+static void aspeed_hace_g3_gate(void *opaque, int n, int level)
+{
+    /* SCU g3-hace-gate: HAC compute off (YCLK stopped or AES_RST_N held). */
+    ASPEED_HACE(opaque)->g3_compute_gated = level;
+}
+
 static void aspeed_hace_realize(DeviceState *dev, Error **errp)
 {
     AspeedHACEState *s = ASPEED_HACE(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     sysbus_init_irq(sbd, &s->irq);
+    qdev_init_gpio_in_named(dev, aspeed_hace_g3_gate, "g3-hace-gate", 1);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &aspeed_hace_ops, s,
             TYPE_ASPEED_HACE, 0x1000);
