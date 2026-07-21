@@ -62,6 +62,16 @@ struct SMBusDeviceClass {
      * return 0xff in that case.
      */
     uint8_t (*receive_byte)(SMBusDevice *dev);
+
+    /*
+     * Optional. Called with the FIRST byte of a write phase (the SMBus command
+     * code) before it is buffered. Return non-zero to NACK the command byte,
+     * modelling a device that does not implement that command (real hardware
+     * NACKs unsupported commands, which is how a master/OS distinguishes an
+     * absent optional register from a present one). NULL (the default) keeps
+     * the historical behaviour of ACKing every command.
+     */
+    int (*check_command)(SMBusDevice *dev, uint8_t cmd);
 };
 
 #define SMBUS_DATA_MAX_LEN 34  /* command + len + 32 bytes of data.  */

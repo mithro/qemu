@@ -134,6 +134,26 @@ static const VMStateDescription vmstate_pmbus_psu = {
     }
 };
 
+static int pmbus_psu_check_command(SMBusDevice *smd, uint8_t cmd)
+{
+    /*
+     * This PSU implements VIN/VOUT/IIN/IOUT/PIN/POUT/TEMPERATURE_1/FAN_1 only.
+     * NACK the optional sensor commands it does NOT have, so an OS PMBus core
+     * treats them as absent instead of creating phantom in2(vcap)/temp2/temp3
+     * hwmon attributes — otherwise the generic handler returns 0xFFFF, which the
+     * OS reads as present and decodes (LINEAR11) to -0.5 = -500 milli-units.
+     * A real PSU NACKs unsupported command codes.
+     */
+    switch (cmd) {
+    case PMBUS_READ_VCAP:
+    case PMBUS_READ_TEMPERATURE_2:
+    case PMBUS_READ_TEMPERATURE_3:
+        return -1; /* NACK */
+    default:
+        return 0;
+    }
+}
+
 static void pmbus_psu_class_init(ObjectClass *klass, void *data)
 {
     ResettableClass *rc = RESETTABLE_CLASS(klass);
@@ -144,6 +164,7 @@ static void pmbus_psu_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_pmbus_psu;
     k->device_num_pages = 1;
     rc->phases.exit = pmbus_psu_exit_reset;
+    SMBUS_DEVICE_CLASS(klass)->check_command = pmbus_psu_check_command;
 }
 
 static const TypeInfo pmbus_psu_info = {

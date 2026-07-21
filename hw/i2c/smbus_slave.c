@@ -182,10 +182,17 @@ static uint8_t smbus_i2c_recv(I2CSlave *s)
 static int smbus_i2c_send(I2CSlave *s, uint8_t data)
 {
     SMBusDevice *dev = SMBUS_DEVICE(s);
+    SMBusDeviceClass *sc = SMBUS_DEVICE_GET_CLASS(dev);
 
     switch (dev->mode) {
     case SMBUS_WRITE_DATA:
         DPRINTF("Write data %02x\n", data);
+        if (dev->data_len == 0 && sc->check_command &&
+            sc->check_command(dev, data) != 0) {
+            /* Device does not implement this command -> NACK the command byte. */
+            DPRINTF("NACK unsupported command %02x\n", data);
+            return -1;
+        }
         if (dev->data_len >= sizeof(dev->data_buf)) {
             BADF("Too many bytes sent\n");
         } else {
