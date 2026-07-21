@@ -41,6 +41,13 @@ struct AspeedMDMAAST2050State {
     qemu_irq irq;
 
     uint32_t regs[ASPEED_MDMA_AST2050_NR_REGS];
+
+    /*
+     * Re-entrancy guard: a command executes a DMA to a guest-controlled dst; if
+     * dst aliases this device's own MMIO window the write re-enters the command
+     * path. Not migrated (always false outside aspeed_mdma_do_command()).
+     */
+    bool in_command;
 };
 
 #endif /* ASPEED_MDMA_AST2050_H */

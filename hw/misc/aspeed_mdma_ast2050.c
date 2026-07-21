@@ -80,11 +80,27 @@ static void aspeed_mdma_do_command(AspeedMDMAAST2050State *s, uint32_t cmd)
     uint32_t dst = s->regs[MDMA_DST >> 2] & MDMA_ADDR_MASK;
     uint32_t fill = s->regs[MDMA_FILL >> 2];
 
+    /*
+     * Re-entrancy guard (gate-b code-review finding): the transfer below issues
+     * address_space writes to a guest-controlled dst; if dst aliases this
+     * device's own MMIO window the write re-enters aspeed_mdma_write() -> here,
+     * and a crafted self-referential fill would recurse until the native stack
+     * overflows. Drop any nested invocation with a guest-error log.
+     */
+    if (s->in_command) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: re-entrant MDMA command (dst aliases the MDMA register "
+                      "window?) dropped\n", __func__);
+        return;
+    }
+
     if (len == 0) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: MDMA command with length 0 (invalid)\n",
                       __func__);
         return;
     }
+
+    s->in_command = true;
 
     if (type == MDMA_TYPE_FILL) {
         /* Buffer fill: dword pattern over a dword-aligned range (writes only). */
@@ -114,6 +130,7 @@ static void aspeed_mdma_do_command(AspeedMDMAAST2050State *s, uint32_t cmd)
     } else {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: reserved MDMA command type %u\n",
                       __func__, type);
+        s->in_command = false;
         return;
     }
 
@@ -122,6 +139,8 @@ static void aspeed_mdma_do_command(AspeedMDMAAST2050State *s, uint32_t cmd)
         s->regs[MDMA_IRQ_STS >> 2] |= BIT(16 + id);
     }
     aspeed_mdma_update_irq(s);
+
+    s->in_command = false;
 }
 
 static uint64_t aspeed_mdma_read(void *opaque, hwaddr offset, unsigned size)
@@ -191,6 +210,7 @@ static void aspeed_mdma_reset(DeviceState *dev)
 
     memset(s->regs, 0, sizeof(s->regs));
     s->regs[MDMA_IRQ_STS >> 2] = MDMA_STS_RESET;   /* queue empty (16 dwords free) */
+    s->in_command = false;
     qemu_set_irq(s->irq, 0);
 }
 
