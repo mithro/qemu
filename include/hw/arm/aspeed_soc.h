@@ -125,6 +125,7 @@ struct Aspeed2400SoCState {
     AspeedP2AAST2050State p2a_g3;     /* AST2050 (G3) P2A PCI->AHB back door */
     AspeedUDCAST2050State udc_g3;     /* AST2050 (G3) USB device/vhub @0x1E6A0000 */
     SerialMM vuart;                   /* AST2050 (G3) host VUART @0x1E787000 (SOL) */
+    SerialMM puart;                   /* AST2050 (G3) LPC pass-through UART @0x1E788000 (§29.4) */
     /*
      * VUART is an LPC SUB-interrupt on real hardware: the AST2050 Interrupt
      * Source Table (datasheet §10, Table 36) has a SINGLE "LPC interrupt" at VIC
@@ -285,6 +286,7 @@ enum {
     ASPEED_DEV_SLIIO,
     ASPEED_GIC_DIST,
     ASPEED_GIC_REDIST,
+    ASPEED_DEV_PUART,
 };
 
 qemu_irq aspeed_soc_get_irq(AspeedSoCState *s, int dev);

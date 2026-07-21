@@ -58,6 +58,7 @@ static const hwaddr aspeed_soc_ast2400_memmap[] = {
     [ASPEED_DEV_UART4]  = 0x1E78F000,
     [ASPEED_DEV_UART5]  = 0x1E784000,
     [ASPEED_DEV_VUART]  = 0x1E787000,
+    [ASPEED_DEV_PUART]  = 0x1E788000,
     [ASPEED_DEV_SDRAM]  = 0x40000000,
 };
 
@@ -95,6 +96,7 @@ static const hwaddr aspeed_soc_ast2500_memmap[] = {
     [ASPEED_DEV_UART4]  = 0x1E78F000,
     [ASPEED_DEV_UART5]  = 0x1E784000,
     [ASPEED_DEV_VUART]  = 0x1E787000,
+    [ASPEED_DEV_PUART]  = 0x1E788000,
     [ASPEED_DEV_SDRAM]  = 0x80000000,
 };
 
@@ -306,6 +308,19 @@ static void aspeed_ast2400_soc_init(Object *obj)
      */
     if (sc->has_vuart) {
         object_initialize_child(obj, "vuart", &a->vuart, TYPE_SERIAL_MM);
+    }
+
+    /*
+     * AST2050 (G3) LPC Pass-through UART (PUART, 0x1E788000, datasheet §29.4): a
+     * second 16550 alongside the VUART.  On real hardware it redirects an LPC-side
+     * host COM port; there is no ARM-side VIC source for it (datasheet §10 Table 36
+     * lists no PUART interrupt).  In this standalone BMC machine there is no LPC
+     * host peer, so we model the BMC-side 16550 register block (no IRQ, no chardev
+     * backend) so the device is present and its registers respond instead of
+     * falling through to the 0x1E600000 iomem catch-all.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        object_initialize_child(obj, "puart", &a->puart, TYPE_SERIAL_MM);
     }
 
     /*
@@ -671,6 +686,28 @@ static void aspeed_ast2400_soc_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(smm), 0, qdev_get_gpio_in(org, 0));
         aspeed_mmio_map(s, SYS_BUS_DEVICE(smm), 0,
                         sc->memmap[ASPEED_DEV_VUART]);
+    }
+
+    /*
+     * PUART (AST2050/G3, 0x1E788000, §29.4) — LPC pass-through 16550. No ARM-side
+     * VIC interrupt (datasheet §10 Table 36), and no chardev backend in this
+     * host-less BMC machine: the BMC-side 16550 register file is what we model, so
+     * the block is present and responds (e.g. its scratch register at reg 7) rather
+     * than falling through to the iomem catch-all.
+     */
+    if (sc->silicon_rev == AST2050_A1_SILICON_REV) {
+        SerialMM *smm = &a->puart;
+
+        qdev_prop_set_uint8(DEVICE(smm), "regshift", 2);
+        qdev_prop_set_uint32(DEVICE(smm), "baudbase", 38400);
+        qdev_set_legacy_instance_id(DEVICE(smm),
+                                    sc->memmap[ASPEED_DEV_PUART], 2);
+        qdev_prop_set_uint8(DEVICE(smm), "endianness", DEVICE_LITTLE_ENDIAN);
+        if (!sysbus_realize(SYS_BUS_DEVICE(smm), errp)) {
+            return;
+        }
+        aspeed_mmio_map(s, SYS_BUS_DEVICE(smm), 0,
+                        sc->memmap[ASPEED_DEV_PUART]);
     }
 
     /* I2C */
